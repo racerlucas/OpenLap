@@ -766,6 +766,66 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
     _container?.querySelector('#scan-btn')?.removeAttribute('disabled');
   }
 
+  async function runAutoLapSplitFromJson() {
+    try {
+      setStatus('请选择赛道 JSON（包含起终线）…');
+      const jsonPath = await API.openFileDialog(['Track JSON (*.json)']);
+      if (!jsonPath) return;
+
+      setStatus('请选择待切圈数据目录（gpx/vbo）…');
+      const inputDir = await API.openFolderDialog();
+      if (!inputDir) return;
+
+      setStatus('请选择输出目录…');
+      const outputDir = await API.openFolderDialog();
+      if (!outputDir) return;
+
+      const btn = _container?.querySelector('#lap-split-btn');
+      if (btn) btn.setAttribute('disabled', '');
+      setStatus('正在按赛道起终线切圈…');
+
+      const res = await API.autoSplitLapsFromJson(jsonPath, inputDir, outputDir);
+      const n = (res?.processed || []).length;
+      const k = (res?.skipped || []).length;
+      setStatus(`切圈完成：${n} 个成功，${k} 个跳过。正在重扫…`);
+      await doScan(true);
+    } catch (e) {
+      setStatus('切圈失败：' + String(e));
+    } finally {
+      _container?.querySelector('#lap-split-btn')?.removeAttribute('disabled');
+    }
+  }
+
+  async function launchManualLapSplitGui() {
+    const btn = _container?.querySelector('#lap-split-btn');
+    try {
+      if (btn) btn.setAttribute('disabled', '');
+      setStatus('正在启动手动画线切圈工具…');
+      const res = await API.launchManualLapSplitGui();
+      if (res?.started) {
+        setStatus('已启动手动画线工具（在 GPX/VBO 轨迹上画线）。保存后回到这里点 Scan。');
+      } else {
+        setStatus('手动画线工具启动失败。');
+      }
+    } catch (e) {
+      setStatus('手动画线工具启动失败：' + String(e));
+    } finally {
+      if (btn) btn.removeAttribute('disabled');
+    }
+  }
+
+  function toggleLapSplitMenu() {
+    const menu = _container?.querySelector('#lap-split-menu');
+    if (!menu) return;
+    const isOpen = menu.style.display === 'block';
+    menu.style.display = isOpen ? 'none' : 'block';
+  }
+
+  function closeLapSplitMenu() {
+    const menu = _container?.querySelector('#lap-split-menu');
+    if (menu) menu.style.display = 'none';
+  }
+
   // ── Drag resizer ──────────────────────────────────────────────────────────────
 
   function initResizer(container) {
@@ -830,6 +890,13 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
       <span class="status-text" id="scan-status">${esc(_statusMsg||'Loading…')}</span>
     </div>
     <div class="toolbar-right">
+      <div style="position:relative;display:inline-block">
+        <button class="btn btn-secondary" id="lap-split-btn">切圈 ▾</button>
+        <div id="lap-split-menu" style="display:none;position:absolute;right:0;top:30px;z-index:50;min-width:180px;background:var(--bg2);border:1px solid var(--line);border-radius:6px;padding:6px;box-shadow:0 6px 20px rgba(0,0,0,.35)">
+          <button class="btn btn-secondary" id="lap-split-opt-track" style="width:100%;margin-bottom:6px;text-align:left">选择赛道（JSON起终线）</button>
+          <button class="btn btn-secondary" id="lap-split-opt-manual" style="width:100%;text-align:left">手动画起终点线</button>
+        </div>
+      </div>
       <button class="btn btn-secondary" id="scan-btn">↺ Scan</button>
     </div>
   </div>
@@ -866,6 +933,21 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
 </div>`;
 
     container.querySelector('#scan-btn').addEventListener('click', () => doScan(false));
+    container.querySelector('#lap-split-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleLapSplitMenu();
+    });
+    container.querySelector('#lap-split-opt-track')?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      closeLapSplitMenu();
+      await runAutoLapSplitFromJson();
+    });
+    container.querySelector('#lap-split-opt-manual')?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      closeLapSplitMenu();
+      await launchManualLapSplitGui();
+    });
+    container.addEventListener('click', () => closeLapSplitMenu());
     initResizer(container);
 
     // XRK auto-conversion progress from the backend

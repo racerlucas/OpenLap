@@ -240,6 +240,12 @@ python main.py
 
 Configuration is stored at `~/.openlap/config.json`.
 
+Track JSON (lap splitting start/finish lines):
+
+- Put your private track configs under `tracks/` as `*.json` (for example `tracks/guangzhou.json`).
+- Real track json files are intentionally gitignored; only `*.template.json` is committed.
+- Use `tracks/track.template.json` as the schema starter.
+
 **Known macOS limitations**
 
 - AIM `.xrk` / `.xrz` / `.drk` conversion is unavailable — AIM only ships the required `MatLabXRK` library as a Windows DLL. RaceBox CSV, MoTeC `.ld`, and GPX files work normally.

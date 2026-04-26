@@ -22,3 +22,11 @@ pyproject.spec
 
 # Logs
 *.log
+
+# Internal tooling / local data processing sandbox
+test_data_process/
+
+# Product track configs:
+# keep template docs in repo, keep real customer/track json local only.
+tracks/*.json
+!tracks/*.template.json

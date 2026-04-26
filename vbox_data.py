@@ -70,12 +70,20 @@ def _parse_date_from_comments(comments: str) -> Optional[datetime]:
     return None
 
 
-def _dms_to_decimal(raw: float, hemisphere: str) -> float:
-    """Convert Racelogic DDMM.MMMMM encoding to decimal degrees."""
+def _dms_to_decimal(raw: float, hemisphere: Optional[str]) -> float:
+    """Convert Racelogic DDMM.MMMMM encoding to decimal degrees.
+
+    When hemisphere is unknown from channel names, preserve the sign encoded
+    in the numeric value itself (common in custom-exported VBO files).
+    """
     deg = floor(abs(raw) / 100)
     minutes = abs(raw) - deg * 100
     decimal = deg + minutes / 60.0
-    return -decimal if hemisphere in ('S', 'W') else decimal
+    if hemisphere in ('S', 'W'):
+        return -decimal
+    if hemisphere in ('N', 'E'):
+        return decimal
+    return -decimal if raw < 0 else decimal
 
 
 def _parse_hhmmss(raw: float) -> Tuple[int, int, float]:
@@ -117,7 +125,7 @@ def load_vbo(path: str) -> Session:
     idx_lat_g   = _find('lateral-acc', 'lateral acc', 'ay')
     idx_lon_g   = _find('longitudinal-acc', 'longitudinal acc', 'ax')
     idx_vert_g  = _find('az', 'vertical-acc', 'vertical acc')
-    idx_lap     = _find('lap trigger', 'lap-trigger', 'lapctr', 'lap beacon', 'lap count')
+    idx_lap     = _find('lap', 'lap trigger', 'lap-trigger', 'lapctr', 'lap beacon', 'lap count')
     idx_rpm     = _find('rpm')
     idx_yaw     = _find('yaw rate', 'yaw-rate')
 
@@ -125,8 +133,19 @@ def load_vbo(path: str) -> Session:
         raise ValueError(f"Missing required channels (time/lat/lon) in {path}")
 
     # Hemisphere: read from channel name
-    lat_hem = 'S' if any('south' in c for c in channels if 'latitude' in c) else 'N'
-    lon_hem = 'W' if any('west'  in c for c in channels if 'longitude' in c) else 'E'
+    lat_hem: Optional[str] = None
+    lon_hem: Optional[str] = None
+    for c in channels:
+        if 'latitude' in c:
+            if 'south' in c:
+                lat_hem = 'S'
+            elif 'north' in c:
+                lat_hem = 'N'
+        if 'longitude' in c:
+            if 'west' in c:
+                lon_hem = 'W'
+            elif 'east' in c:
+                lon_hem = 'E'
 
     # Speed conversion factor
     speed_ch = channels[idx_speed] if idx_speed is not None else ''

@@ -62,6 +62,8 @@ const API = (() => {
       install_playwright_chromium:   () => null,
       start_auto_sync:               () => ({ queued: 0 }),
       cancel_auto_sync:              () => null,
+      auto_split_laps_from_json:     () => ({ processed: [], skipped: [] }),
+      launch_manual_lap_split_gui:   () => ({ started: true, pid: 0 }),
     };
     const fn = mocks[method];
     return fn ? fn() : null;
@@ -131,5 +133,7 @@ const API = (() => {
 
     startAutoSync:              (sessions)           => call('start_auto_sync', sessions),
     cancelAutoSync:             ()                   => call('cancel_auto_sync'),
+    autoSplitLapsFromJson:      (jsonPath, inputDir, outputDir) => call('auto_split_laps_from_json', jsonPath, inputDir, outputDir),
+    launchManualLapSplitGui:    ()                   => call('launch_manual_lap_split_gui'),
   };
 })();

@@ -1,0 +1,14 @@
+{
+  "metadata": {
+    "name": "Track Name",
+    "city": "",
+    "country": ""
+  },
+  "label_info": {
+    "direction": "CCW",
+    "line_lonlat": [
+      [0.0, 0.0],
+      [0.0, 0.0]
+    ]
+  }
+}

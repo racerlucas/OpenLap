@@ -1094,6 +1094,17 @@ class WebviewAPI:
         si['_video_override'] = str(Path(video_path).resolve())
         self._config.save()
 
+    # ── Custom lap split tools ────────────────────────────────────────────────
+    def auto_split_laps_from_json(self, json_path: str, input_dir: str, output_dir: str) -> dict:
+        """Batch split .gpx/.vbo laps using start line from a track JSON file."""
+        from lap_split_tools import auto_split_folder_with_track_json
+        return auto_split_folder_with_track_json(json_path, input_dir, output_dir)
+
+    def launch_manual_lap_split_gui(self) -> dict:
+        """Launch test_data_process/gui_split.py in a separate process."""
+        from lap_split_tools import launch_gui_split
+        return launch_gui_split()
+
     # ── RaceBox session download ──────────────────────────────────────────────
     def download_racebox_sessions(self) -> None:
         """Start a background RaceBox download. Progress is pushed as events:

@@ -182,12 +182,23 @@ def load_gpx(path: str) -> Session:
                                 pass
                             break
 
+                lap_num: Optional[int] = None
+                if ext_el is not None:
+                    for child in ext_el.iter():
+                        if _local(child).lower() == 'lap':
+                            try:
+                                lap_num = int(float((child.text or '').strip()))
+                            except (ValueError, TypeError):
+                                lap_num = None
+                            break
+
                 raw.append({
                     'lat':       lat,
                     'lon':       lon,
                     'alt':       alt,
                     'time':      ts,
                     'ext_speed': ext_speed,   # m/s or None
+                    'lap':       lap_num,
                 })
 
     if not raw:
@@ -293,7 +304,7 @@ def load_gpx(path: str) -> Session:
             gforce_x    = float(lon_g[i]),
             gforce_y    = float(lat_g[i]),
             gforce_z    = 0.0,
-            lap         = 1,
+            lap         = int(timed[i].get('lap') or 1),
             gyro_x      = 0.0,
             gyro_y      = 0.0,
             gyro_z      = 0.0,
@@ -302,10 +313,36 @@ def load_gpx(path: str) -> Session:
         )
         all_pts.append(pt)
 
-    # ── Single timed lap (the whole track) ────────────────────────────────────
-    total_dur = float(elapsed[-1]) if n > 1 else 0.0
-    lap = Lap(lap_num=1, points=all_pts, duration=total_dur,
-              is_outlap=False, is_inlap=False)
+    # ── Build laps ─────────────────────────────────────────────────────────────
+    from collections import defaultdict
+    buckets = defaultdict(list)
+    for pt in all_pts:
+        buckets[pt.lap].append(pt)
+
+    laps: List[Lap] = []
+    for lap_num in sorted(buckets.keys()):
+        pts = buckets[lap_num]
+        if not pts:
+            continue
+        lap_t0 = pts[0].elapsed
+        for pt in pts:
+            pt.lap_elapsed = pt.elapsed - lap_t0
+        lap_dur = pts[-1].elapsed - pts[0].elapsed
+        laps.append(Lap(
+            lap_num=lap_num,
+            points=pts,
+            duration=lap_dur,
+            is_outlap=(lap_num == 0),
+            is_inlap=False,
+        ))
+
+    # If no explicit lap metadata exists, keep legacy single-lap behaviour.
+    if len(laps) <= 1:
+        total_dur = float(elapsed[-1]) if n > 1 else 0.0
+        laps = [Lap(lap_num=1, points=all_pts, duration=total_dur,
+                    is_outlap=False, is_inlap=False)]
+    else:
+        total_dur = max((l.duration for l in laps if not l.is_outlap), default=0.0)
 
     # Extract a track name from the file
     trk_name_el = None
@@ -328,9 +365,9 @@ def load_gpx(path: str) -> Session:
         track         = track_name,
         configuration = '',
         session_type  = '',
-        best_lap_time = total_dur,
+        best_lap_time = min((l.duration for l in laps if not l.is_outlap), default=total_dur),
         all_points    = all_pts,
-        laps          = [lap],
+        laps          = laps,
         is_bike       = False,
         csv_path      = path,
     )
