@@ -1,269 +1,220 @@
-# OpenLap — Free Motorsport Telemetry Overlay Software
+# OpenLap — 免费的赛车遥测视频叠加软件
 
-**OpenLap** is a free, open-source desktop application that overlays telemetry data on racing video footage. It supports **RaceBox**, **AIM MyChron**, **MoTeC**, and **GPX** data sources and runs entirely on your PC — no subscription, no cloud, no fees.
+**OpenLap** 是一款免费、开源的桌面应用，用于把遥测数据叠加到赛车视频中。  
+支持 **RaceBox**、**AIM MyChron**、**MoTeC**、**GPX** 等数据源，所有处理都在本地完成：不订阅、不上云、无导出收费。
 
-Point it at your telemetry files and a folder of race videos, and it matches sessions, syncs timing, and renders professional gauge overlays — all from a single window.
-
-> Licensed under the **GNU General Public License v3**. Free forever. Forks must stay open source.
-
----
-
-## Quick Start (Windows — no technical knowledge needed)
-
-No Python, no FFmpeg, no installation required. Everything is bundled.
-
-**1. Download**
-
-Go to **[Releases](https://github.com/LaurensVR3/OpenLap/releases/latest)** and download the `.zip` file.
-
-**2. Unzip**
-
-Extract the zip anywhere — your Desktop, `C:\Tools\OpenLap`, wherever you like. You will get a folder containing `OpenLap.exe` and a folder called `_internal`.
-
-> **Important:** keep `OpenLap.exe` and the `_internal` folder together in the same location at all times. Moving just the `.exe` will break the app.
-
-**3. Run**
-
-Double-click `OpenLap.exe`.
-
-> **Windows SmartScreen warning?** Windows shows this for all software that isn't commercially signed. OpenLap is open source and safe. Click **More info**, then **Run anyway**.
-
-**4. Set up your folders (Settings tab)**
-
-When the app opens, go to the **Settings tab first** and tell it where your files live:
-
-- **RaceBox folder** — the folder where your RaceBox `.csv` files are stored
-- **AIM folder** — the folder containing your AIM `.xrk` / `.xrz` / `.drk` files
-- **MoTeC folder** — the folder containing your MoTeC `.ld` files
-- **GPX folder** — the folder containing your `.gpx` files
-- **Video folder** — the folder where your race videos are stored
-- **Export folder** — where finished videos will be saved
-
-You only need to fill in the sources you actually use.
-
-**First-time setup for AIM users:** click **Download DLL** in the AIM section. This fetches the conversion library that reads `.xrk` files. You only need to do this once.
-
-**First-time setup for RaceBox cloud users:** click **Download Login Component**, wait for it to finish, then click **Check Auth** and log in with your RaceBox account.
-
-**5. Scan your sessions (Data tab)**
-
-Go to the **Data tab**. Sessions are scanned automatically on startup — they will appear grouped by date. If nothing shows up, click **Scan**.
-
-Each session shows its laps and whether a matching video was found:
-- `✓ user` — sync confirmed, ready to export
-- `~ auto` — sync detected automatically (blue); scrub to verify, click **Confirm** to lock it in
-- `≈ unset` — no sync offset set yet; use the Align Video panel to set it manually
-- `no vid` — no matching video found; click **Browse for video…** to link one manually
-
-**6. Set the sync offset**
-
-The sync offset tells OpenLap exactly where in the video the lap timer starts. Without it, gauges will be out of step with the footage.
-
-- **Auto-sync (recommended):** enable **Auto Sync** in Settings. After scanning, OpenLap cross-correlates video motion against G-force to detect the offset automatically. Works best with RaceBox, AIM, and MoTeC data. GPX files do not contain G-force, so auto-sync will not run for GPX sessions.
-- **Manual sync:** in the Data tab, select a session and use the **Align Video** panel. Scrub the video to the exact moment the lap timer starts, then click **Mark**.
-
-**7. Edit the overlay (Overlay tab)**
-
-Click **Open in Overlay →** on any session to jump to the editor.
-
-- Use the lap selector (◀ ▶ or dropdown) to switch between laps
-- Click **Add Gauge** to place a new element — pick a channel (Speed, RPM, G-force, etc.) and a style
-- Drag gauges to reposition; drag the corner handle to resize
-- Switch themes (Dark · Light · Colorful · Monochrome) using the theme picker
-- Save your layout as a named preset so you can reuse it
-
-**8. Export (Export tab)**
-
-Click **+ Export** on the lap or session you want, then go to the **Export tab**.
-
-- Choose scope: **This Lap**, **Fastest Lap**, **All Laps**, or **Full Session**
-- Choose encoder: OpenLap auto-detects your GPU (NVIDIA NVENC · AMD AMF · Intel QSV). If no GPU is found it falls back to CPU (libx264) — this is slower but always works
-- Click **Start Export**. Progress and a log are shown live. Finished videos are saved to your Export Folder.
+> 许可证：**GNU GPL v3**。永久免费，二次分发需保持开源。
 
 ---
 
-## Preview
+## 快速开始（Windows）
 
-**Sample output video** — Karting Haute Picardie Arvillers:
+无需 Python、无需单独安装 FFmpeg，开箱即用。
 
-[![OpenLap telemetry overlay on karting video — speed, RPM, G-force, circuit map gauges](https://img.youtube.com/vi/gsKdIWs6FvM/maxresdefault.jpg)](https://youtu.be/gsKdIWs6FvM)
+### 1）下载
 
-### Screenshots
+前往 [Releases](https://github.com/LaurensVR3/OpenLap/releases/latest) 下载最新版压缩包。
 
-| Data tab | Overlay tab | Export tab | Settings tab |
-|---|---|---|---|
-| ![Data tab — session list with lap times and sync status](docs/screenshot_data.png) | ![Overlay tab — live video preview with gauge editor](docs/screenshot_overlay.png) | ![Export tab — encoder selection and progress log](docs/screenshot_export.png) | ![Settings tab — telemetry and video folder configuration](docs/screenshot_settings.png) |
+### 2）解压
 
----
+解压后会看到 `OpenLap.exe` 和 `_internal` 目录。
 
-## Troubleshooting
+> 注意：`OpenLap.exe` 必须和 `_internal` 保持同目录，不能只移动 exe。
 
-**Sessions are not appearing in the Data tab**
-- Check that the correct folder is set in Settings for your data source
-- Make sure the files are the right type (`.csv` for RaceBox, `.xrk`/`.xrz`/`.drk` for AIM, `.ld` for MoTeC, `.gpx` for GPX)
-- Click **Scan** to force a rescan
-- AIM files also need the DLL downloaded (Settings → Download DLL)
+### 3）运行
 
-**No video matched to a session**
-- OpenLap matches by timestamp. Make sure your camera clock is roughly correct
-- Use **Browse for video…** in the Data tab to link a video manually
-- Supported video formats: anything FFmpeg can read (MP4, MOV, MTS, AVI, etc.)
+双击 `OpenLap.exe`。
 
-**Auto-sync did nothing / sync is wrong**
-- Auto-sync requires G-force data. GPX sessions do not have G-force — use manual sync instead
-- If confidence was too low the result is discarded. Use manual sync via the Align Video panel
-- A manually set offset (`✓ user`) is never overwritten by auto-sync
+> 若出现 Windows SmartScreen：点击“更多信息” -> “仍要运行”。
 
-**Export failed or produced no output**
-- Check the log in the Export tab for the specific error
-- Make sure the Export Folder is set in Settings and the folder actually exists
-- Try switching to the CPU encoder (libx264) if a GPU encoder fails
+### 4）先在 Settings 配置路径
 
-**App crashes on launch**
-- Make sure `OpenLap.exe` and the `_internal` folder are in the same directory — never move the `.exe` on its own
+按需配置以下目录：
 
----
+- RaceBox 数据目录（`.csv`）
+- AIM 数据目录（`.xrk/.xrz/.drk`）
+- MoTeC 数据目录（`.ld`）
+- GPX 数据目录（`.gpx`）
+- 视频目录
+- 导出目录
 
-## Features
+只填你实际使用的数据源即可。
 
-### Data & Session Management
-- Per-source telemetry folders — configure separate directories for RaceBox, AIM, MoTeC, and GPX data
-- Auto-scan on startup with persistent session cache for fast restarts
-- Sessions grouped by date with lap list, best time, and video match status
-- Manual video reassignment for sessions where auto-matching doesn't find the right clip
-- Multi-clip support — multiple video segments per session are joined automatically before rendering
-- **Auto-sync** (opt-in): cross-correlates video motion against G-force to detect the sync offset automatically after each scan — results appear as `~ auto` and can be confirmed or fine-tuned in the Data tab
-- Frame-accurate manual sync: scrub the video preview to where the lap timer starts, press **Mark** — saves as a `✓ user` offset that auto-sync will never overwrite
-- RaceBox cloud download directly from the app (requires a RaceBox account)
-- AIM `.xrk` / `.xrz` / `.drk` files are converted to CSV on first scan using the AIM MatLabXRK DLL
+首次使用补充：
 
-### Overlay Editor
-- Live video preview with scrub bar — see exactly how gauges look on your footage before exporting
-- Freely positionable, resizable gauge elements — drag to move, drag corner handle to resize
-- Element-to-element snapping with cyan alignment guides; size snaps to 5% grid
-- Lap selector — switch between laps while the video preview stays in sync
-- **4 overlay themes**: Dark · Light · Colorful · Monochrome
-- **Gauge styles**: Numeric · Bar · Dial · Line · Delta · Compare · Lean · G-Meter · Splits · Sector Bar · Multi-Line · Circuit Map · Zoomed Map · Scoreboard · Info · Image/Logo
-- Bike mode — enables Lean gauge and reads lean angle from compatible devices
-- Reference lap overlay — compare any lap against a reference with live delta time
-- Named preset layouts — save, load, and switch overlay configurations
+- AIM 用户：点击 **Download DLL**（仅首次需要）
+- RaceBox 云下载用户：点击 **Download Login Component**，完成后再 **Check Auth**
 
-### Export
-- **Scope**: This Lap, Fastest Lap, All Laps (one file per lap), or Full Session
-- GPU-accelerated encoding with auto-detection: NVENC (NVIDIA) · AMF (AMD) · QSV (Intel) · libx264 (CPU fallback)
-- Adjustable quality (CRF) and parallel worker count
-- Configurable pre/post lap padding
-- Progress bar and log output per render job
+### 5）在 Data 页扫描会话
 
-### Extensibility
-- Plugin-based style system — drop a `.py` file into `styles/` and it appears in the UI automatically
-- All styles receive theme colour tokens; custom styles support all four themes with no extra work
+应用启动后会自动扫描，也可手动点 **Scan**。
+
+会话状态说明：
+
+- `✓ user`：已人工确认同步偏移
+- `~ auto`：自动检测到偏移（建议人工确认）
+- `≈ unset`：未设置偏移
+- `no vid`：未匹配到视频，可手动绑定
+
+### 6）设置视频同步偏移
+
+同步偏移决定仪表与视频时间轴的对齐。
+
+- **自动同步（推荐）**：在 Settings 打开 Auto Sync  
+  应用会根据视频运动信号与 G 值做相关匹配自动求偏移。
+- **手动同步**：在 Data 页对准 Lap 起点后点击 **Mark**
+
+> GPX 不含 G 值，通常需要手动同步。
+
+### 7）在 Overlay 页编辑仪表
+
+- 通过 **Open in Overlay →** 打开编辑器
+- 点击 **Add Gauge** 增加元素
+- 拖动移动，拖拽角点缩放
+- 切换主题（Dark/Light/Colorful/Monochrome）
+- 可保存为预设（Preset）
+
+### 8）导出视频
+
+在 Data/Overlay 中加入导出项后，进入 Export 页：
+
+- 选择范围：当前圈 / 最快圈 / 全部圈 / 全 Session
+- 选择编码器：自动检测 GPU（NVENC/AMF/QSV），无则回退 CPU（libx264）
+- 点击 **Start Export**
 
 ---
 
-## Supported Data Sources
+## 分圈（Lap Splitting）
 
-| Source | Devices / File types | Notes |
-|---|---|---|
-| **RaceBox** | RaceBox Mini, Mini S, Pro, Bike (`.csv`) | Car and bike mode; cloud download built-in |
-| **AIM MyChron** | MyChron 5, MyChron 5S, Solo 2 (`.xrk` · `.xrz` · `.drk`) | Auto-converted to CSV on scan |
-| **MoTeC** | Any MoTeC logger exporting `.ld` | Binary i2 format; full session lap timing |
-| **GPX** | Any GPS device or phone app (`.gpx`) | Speed derived from position + timestamp; no G-force, auto-sync not available |
+Data 页提供“**切圈**”入口，包含两种方式：
 
-### Telemetry channels
-
-| Channel | Label | Unit |
-|---|---|---|
-| `speed` | Speed | km/h |
-| `rpm` | RPM | rpm |
-| `exhaust_temp` | Exhaust Temp | °C |
-| `gforce_lon` | Long G | G |
-| `gforce_lat` | Lat G | G |
-| `lean` | Lean Angle | ° |
-| `altitude` | Altitude | m |
-| `lap_time` | Lap Time | s |
-| `delta_time` | Delta | s |
+- **选择赛道（JSON 起终线）**：从赛道 JSON 中读取 `label_info.direction` 与 `line_lonlat` 批量切圈
+- **手动画起终点线**：启动 GUI 工具，在 GPX/VBO 轨迹上画线并保存
 
 ---
 
-## Why OpenLap?
+## 赛道配置（Track JSON）
 
-Most telemetry overlay tools are expensive, subscription-based, or locked to a single data source. OpenLap is:
+建议把真实赛道配置放在 `tracks/` 下，例如 `tracks/guangzhou.json`。
 
-- **Free** — no licence fees, no watermarks, no export limits
-- **Open source** — GPL v3; inspect, modify, and contribute
-- **Multi-source** — RaceBox, AIM MyChron, MoTeC, and GPX in one app
-- **GPU-accelerated** — NVIDIA NVENC, AMD AMF, Intel QSV; renders fast on any modern PC
-- **Offline** — no internet required after initial setup; your data stays on your machine
-
-Common use cases: karting, circuit racing, track days, hillclimb, motorcycle track riding, autocross etc
+- 仓库默认忽略真实 `tracks/*.json`
+- 仅提交模板 `tracks/*.template.json`
+- 可从 `tracks/track.template.json` 复制创建
 
 ---
 
-## Support the project
+## 主要功能
 
-OpenLap is free and always will be. If you want to see more/faster progress, please consider sponsoring.
+### 数据与会话管理
 
-[![GitHub Sponsors](https://img.shields.io/github/sponsors/LaurensVR3?label=Sponsor&logo=github&color=ea4aaa)](https://github.com/sponsors/LaurensVR3)
+- 按数据源独立配置目录
+- 启动自动扫描 + 本地缓存
+- 按日期分组展示会话
+- 自动匹配视频并支持手动重绑
+- 多段视频自动拼接渲染
+- 自动同步（可选）与手动同步共存
+- AIM 原始文件自动转 CSV（依赖 AIM DLL）
+
+### 叠加编辑器
+
+- 实时预览与拖拽编辑
+- 元素吸附与对齐辅助
+- 多圈切换预览
+- 4 套主题
+- 多种仪表样式（数值、条形、表盘、折线、Delta、地图、图片等）
+- 支持 Bike 模式与参考圈对比
+- 支持预设保存与切换
+
+### 导出能力
+
+- 多种导出范围
+- GPU 编码加速（NVENC/AMF/QSV）+ CPU 兜底
+- 可调 CRF、并发、前后 padding
+- 实时进度与日志
 
 ---
 
-## Run from source
+## 支持的数据源
 
-Works on Windows and macOS.
+- **RaceBox**：`.csv`
+- **AIM Mychron**：`.xrk/.xrz/.drk`（扫描时转 CSV）
+- **MoTeC**：`.ld`
+- **GPX**：`.gpx`（可计算速度，但无原生 G 值）
+- **VBOX**：`.vbo`（支持读取 `lap` 字段）
 
-**Requirements**
+---
+
+## 常见问题
+
+### 扫描不到会话
+
+- 检查 Settings 路径是否正确
+- 检查文件扩展名是否匹配
+- 手动点击 Scan 重扫
+- AIM 需先安装 DLL
+
+### 视频匹配失败
+
+- 先检查设备时间是否准确
+- 用 Data 页的“手动指定视频”绑定
+
+### 自动同步失败
+
+- 可能置信度不足，改手动同步
+- GPX 通常不适合自动同步
+- `✓ user` 的偏移不会被自动结果覆盖
+
+### 导出失败
+
+- 查看 Export 页日志
+- 检查导出目录可写
+- 尝试切换到 libx264
+
+---
+
+## 从源码运行
+
+支持 Windows / macOS。
+
+### 依赖
 
 - Python 3.10+
-- FFmpeg available on your system `PATH` (`brew install ffmpeg` on macOS)
+- FFmpeg 在 PATH 中可用
 
-**Install Python dependencies**
+### 安装
 
 ```bash
 pip install -e .
 ```
 
-On macOS the Cocoa backend is already pulled in via PyObjC when pywebview is installed, so no extra step is needed. If you see errors about `AppKit` or `WebKit`, make sure pywebview itself was installed successfully.
-
-For RaceBox cloud download (optional):
+可选（RaceBox 云下载）：
 
 ```bash
 pip install -e ".[racebox-download]"
 playwright install chromium
 ```
 
-**Run**
+### 启动
 
 ```bash
 python main.py
 ```
 
-Configuration is stored at `~/.openlap/config.json`.
-
-Track JSON (lap splitting start/finish lines):
-
-- Put your private track configs under `tracks/` as `*.json` (for example `tracks/guangzhou.json`).
-- Real track json files are intentionally gitignored; only `*.template.json` is committed.
-- Use `tracks/track.template.json` as the schema starter.
-
-**Known macOS limitations**
-
-- AIM `.xrk` / `.xrz` / `.drk` conversion is unavailable — AIM only ships the required `MatLabXRK` library as a Windows DLL. RaceBox CSV, MoTeC `.ld`, and GPX files work normally.
-- Hardware-accelerated encoding uses **VideoToolbox** (`h264_videotoolbox`). NVENC / AMF / QSV are Windows/Linux only.
+配置文件默认位于：`~/.openlap/config.json`
 
 ---
 
-## Building from source (Windows)
+## Windows 打包
 
 ```bash
 pip install pyinstaller
 pyinstaller OpenLap.spec --clean -y
 ```
 
-The executable and all dependencies are output to `dist/OpenLap/`.
+输出目录：`dist/OpenLap/`
 
 ---
 
-## License
+## 许可证
 
-GNU General Public License v3 — see [LICENSE](LICENSE) for details.
+GNU General Public License v3，详见 [LICENSE](LICENSE)。

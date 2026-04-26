@@ -12,7 +12,7 @@
   let _unlistenFns = [];   // DOM-lifetime listeners only (State subscriptions)
   let _progressPct = 0;
   let _progressMsg = '';
-  let _badgeText   = 'Idle';
+  let _badgeText   = '空闲';
   let _badgeCls    = 'badge-dim';
 
   // Lap range picker state
@@ -99,11 +99,11 @@
 <div class="page export-page">
   <div class="toolbar">
     <div class="toolbar-left">
-      <span class="page-title">Export</span>
+      <span class="page-title">导出</span>
     </div>
     <div class="toolbar-right">
-      <button class="btn btn-primary" id="exp-start-btn" disabled>Start Export</button>
-      <button class="btn btn-secondary hidden" id="exp-cancel-btn">Cancel</button>
+      <button class="btn btn-primary" id="exp-start-btn" disabled>开始导出</button>
+      <button class="btn btn-secondary hidden" id="exp-cancel-btn">取消</button>
     </div>
   </div>
   <div class="page-divider"></div>
@@ -116,58 +116,58 @@
       <!-- Selected items -->
       <div class="card export-card">
         <div class="card-header">
-          <span class="card-title">Queued Laps</span>
+          <span class="card-title">导出队列</span>
           <span class="badge" id="exp-item-count">0</span>
         </div>
         <div class="card-body" id="exp-item-list">
-          <div class="empty-hint">No laps selected — go to the Data page to add laps.</div>
+          <div class="empty-hint">尚未选择圈次，请到“数据”页添加。</div>
         </div>
       </div>
 
       <!-- Timing -->
       <div class="card export-card">
-        <div class="card-header"><span class="card-title">Timing</span></div>
+        <div class="card-header"><span class="card-title">时间范围</span></div>
         <div class="card-body">
           <div class="form-row">
-            <label>Padding (s)</label>
+            <label>前后补时 (s)</label>
             <input type="number" id="exp-padding" class="input-field input-narrow" value="5" min="0" max="60" step="0.5">
           </div>
           <div class="form-row exp-clip-row hidden">
-            <label>Clip start (s)</label>
+            <label>片段起点 (s)</label>
             <input type="number" id="exp-clip-start" class="input-field input-narrow" value="0" min="0" step="0.1">
           </div>
           <div class="form-row exp-clip-row hidden">
-            <label>Clip end (s)</label>
+            <label>片段终点 (s)</label>
             <input type="number" id="exp-clip-end" class="input-field input-narrow" value="0" min="0" step="0.1">
           </div>
           <div class="exp-range-row hidden" style="flex-direction:column;gap:4px;padding:2px 0 4px">
             <div id="exp-range-header"
                  style="font-size:10px;color:var(--text3);font-style:italic">
-              Click a lap to set start, click another to set end
+              先点起始圈，再点结束圈
             </div>
             <div id="exp-lap-list"
                  style="max-height:170px;overflow-y:auto;border:1px solid var(--border);
                         border-radius:3px;background:var(--bg)">
               <div style="padding:8px;font-size:10px;color:var(--text3)">
-                Select a session to see laps.
+                请选择会话后查看圈次。
               </div>
             </div>
             <input type="hidden" id="exp-range-start" value="1">
             <input type="hidden" id="exp-range-end" value="">
           </div>
           <div class="form-row">
-            <label>Scope</label>
+            <label>导出范围</label>
             <select id="exp-scope" class="input-field">
-              <option value="selected_lap">Selected Lap</option>
-              <option value="lap_range">Lap Range (1 video)</option>
-              <option value="fastest_lap">Fastest Lap</option>
-              <option value="all_laps">All Laps</option>
-              <option value="full">Full Session</option>
+              <option value="selected_lap">当前圈</option>
+              <option value="lap_range">圈段范围（单视频）</option>
+              <option value="fastest_lap">最快圈</option>
+              <option value="all_laps">全部圈</option>
+              <option value="full">完整会话</option>
             </select>
           </div>
           <div class="form-row">
-            <label>Overlay only (.mov)</label>
-            <input type="checkbox" id="exp-overlay-only" class="input-checkbox" title="Export a transparent ProRes 4444 overlay — drop it over your source clip in DaVinci Resolve, Premiere or Final Cut.">
+            <label>仅导出叠加层 (.mov)</label>
+            <input type="checkbox" id="exp-overlay-only" class="input-checkbox" title="导出透明 ProRes 4444 叠加层，可在 DaVinci Resolve / Premiere / Final Cut 里盖到原视频上。">
           </div>
         </div>
       </div>
@@ -178,8 +178,8 @@
     <div class="export-progress-panel">
       <div class="card export-card full-height">
         <div class="card-header">
-          <span class="card-title">Progress</span>
-          <span class="badge badge-dim" id="exp-status-badge">Idle</span>
+          <span class="card-title">进度</span>
+          <span class="badge badge-dim" id="exp-status-badge">空闲</span>
         </div>
         <div class="card-body progress-body">
           <div class="progress-bar-wrap">
@@ -189,7 +189,7 @@
             <span class="progress-pct" id="exp-progress-pct">0%</span>
           </div>
           <div class="progress-status" id="exp-progress-msg"></div>
-          <textarea class="log-area" id="exp-log" readonly placeholder="Export log will appear here…"></textarea>
+          <textarea class="log-area" id="exp-log" readonly placeholder="导出日志会显示在这里…"></textarea>
         </div>
       </div>
     </div>
@@ -211,8 +211,8 @@
       if (!listEl) return;
 
       if (!_rangePickerLaps.length) {
-        listEl.innerHTML = '<div style="padding:8px;font-size:10px;color:var(--text3)">No timed laps found.</div>';
-        if (hdrEl) hdrEl.textContent = 'No timed laps found.';
+        listEl.innerHTML = '<div style="padding:8px;font-size:10px;color:var(--text3)">未找到有效计时圈。</div>';
+      if (hdrEl) hdrEl.textContent = '未找到有效计时圈。';
         return;
       }
 
@@ -220,11 +220,11 @@
 
       if (hdrEl) {
         if (s == null) {
-          hdrEl.textContent = 'Click a lap to set range start.';
+          hdrEl.textContent = '点击某圈设置起点。';
         } else if (e == null) {
-          hdrEl.textContent = `From: Lap ${s} — click another lap to set end.`;
+          hdrEl.textContent = `起点：第 ${s} 圈 — 再点一圈设置终点。`;
         } else {
-          hdrEl.textContent = `Range: Lap ${s} → Lap ${e}`;
+          hdrEl.textContent = `范围：第 ${s} 圈 → 第 ${e} 圈`;
         }
       }
 
@@ -237,9 +237,9 @@
         let bg    = 'transparent';
         let color = 'inherit';
         let badge = '';
-        if (isStart && isEnd) { bg = 'var(--acc)';   color = '#fff'; badge = '<span style="font-size:8px;opacity:.8;margin-left:4px">FROM·TO</span>'; }
-        else if (isStart)     { bg = 'var(--acc)';   color = '#fff'; badge = '<span style="font-size:8px;opacity:.8;margin-left:4px">FROM</span>'; }
-        else if (isEnd)       { bg = 'var(--acc)';   color = '#fff'; badge = '<span style="font-size:8px;opacity:.8;margin-left:4px">TO</span>'; }
+        if (isStart && isEnd) { bg = 'var(--acc)';   color = '#fff'; badge = '<span style="font-size:8px;opacity:.8;margin-left:4px">起止</span>'; }
+        else if (isStart)     { bg = 'var(--acc)';   color = '#fff'; badge = '<span style="font-size:8px;opacity:.8;margin-left:4px">起点</span>'; }
+        else if (isEnd)       { bg = 'var(--acc)';   color = '#fff'; badge = '<span style="font-size:8px;opacity:.8;margin-left:4px">终点</span>'; }
         else if (inRange)     { bg = 'rgba(var(--acc-rgb,99,102,241),0.15)'; }
 
         return `<div class="exp-lap-item" data-num="${lap.lap_num}"
@@ -292,7 +292,7 @@
         _renderLapList();
         return;
       }
-      listEl.innerHTML = '<div style="padding:8px;font-size:10px;color:var(--text3)">Loading…</div>';
+      listEl.innerHTML = '<div style="padding:8px;font-size:10px;color:var(--text3)">加载中…</div>';
       try {
         const all = await API.getLaps(csvPath);
         // Only timed laps (not outlap/inlap)
@@ -344,14 +344,14 @@
     badge.textContent = items.length;
 
     if (!items.length) {
-      list.innerHTML = '<div class="empty-hint">No laps selected — go to the Data page to add laps.</div>';
+      list.innerHTML = '<div class="empty-hint">尚未选择圈次，请到“数据”页添加。</div>';
       return;
     }
 
     // Group items by session CSV path for a tidy display
     const bySession = {};
     for (const item of items) {
-      const key = item.csv_path || 'Unknown';
+      const key = item.csv_path || '未知';
       if (!bySession[key]) bySession[key] = { csv_path: key, source: item.source || '', laps: [] };
       bySession[key].laps.push(item);
     }
@@ -452,9 +452,9 @@
     _progressPct = 0;
     _progressMsg = '';
     $('exp-log').value = '';
-    _setProgress(0, 'Starting…');
+    _setProgress(0, '准备开始…');
     _setExporting(true);
-    _setBadge('Running', 'badge-run');
+    _setBadge('进行中', 'badge-run');
 
     await API.startExport(params);
   }
@@ -482,11 +482,11 @@
 
   function _onDone(detail) {
     const ok  = detail.ok !== false;
-    const msg = detail.message || (ok ? 'Export complete.' : 'Export failed.');
+  const msg = detail.message || (ok ? '导出完成。' : '导出失败。');
     _onLog({ message: msg });
     _setProgress(ok ? 100 : 0, msg);
     _setExporting(false);
-    _setBadge(ok ? 'Done' : 'Error', ok ? 'badge-ok' : 'badge-err');
+    _setBadge(ok ? '完成' : '错误', ok ? 'badge-ok' : 'badge-err');
     // Export finished — offer auto-sync the chance to run now.
     // Python's start_auto_sync skips sessions already synced or failed, so
     // it is safe to call with all matched sessions (it filters internally).
@@ -504,7 +504,7 @@
     const items  = State.get('selectedItems') || [];
     if (start) {
       start.disabled    = active || items.length === 0;
-      start.textContent = active ? 'Exporting…' : 'Start Export';
+      start.textContent = active ? '导出中…' : '开始导出';
       start.classList.toggle('btn-exporting', active);
     }
     if (cancel) { cancel.classList.toggle('hidden', !active); }

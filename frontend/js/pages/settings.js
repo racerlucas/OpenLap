@@ -31,11 +31,11 @@
 <div class="page settings-page">
   <div class="toolbar">
     <div class="toolbar-left">
-      <span class="page-title">Settings</span>
+      <span class="page-title">设置</span>
     </div>
     <div class="toolbar-right">
       <span id="save-msg" class="save-msg"></span>
-      <button class="btn btn-accent" id="save-btn">Save</button>
+      <button class="btn btn-accent" id="save-btn">保存</button>
     </div>
   </div>
   <div class="page-divider"></div>
@@ -44,42 +44,42 @@
 
     <!-- Telemetry folders -->
     <section class="settings-section">
-      <div class="section-title">Telemetry Folders</div>
-      ${_folderRow('RaceBox',     'racebox_path', cfg.racebox_path, 'RaceBox Mini CSV exports')}
-      ${_folderRow('AIM Mychron','aim_path',      cfg.aim_path,     'AIM XRK / CSV files')}
-      ${_folderRow('MoTeC',       'motec_path',   cfg.motec_path,   'MoTeC .ld binary files')}
-      ${_folderRow('GPX',         'gpx_path',     cfg.gpx_path,     '.gpx GPS track files')}
-      ${_folderRow('VBOX',        'vbox_path',    cfg.vbox_path,    'Racelogic VBOX .vbo files')}
+      <div class="section-title">遥测目录</div>
+      ${_folderRow('RaceBox',     'racebox_path', cfg.racebox_path, 'RaceBox Mini CSV 导出目录')}
+      ${_folderRow('AIM Mychron','aim_path',      cfg.aim_path,     'AIM XRK / CSV 文件目录')}
+      ${_folderRow('MoTeC',       'motec_path',   cfg.motec_path,   'MoTeC .ld 二进制文件目录')}
+      ${_folderRow('GPX',         'gpx_path',     cfg.gpx_path,     '.gpx 轨迹文件目录')}
+      ${_folderRow('VBOX',        'vbox_path',    cfg.vbox_path,    'Racelogic VBOX .vbo 文件目录')}
     </section>
 
     <!-- Video & output -->
     <section class="settings-section">
-      <div class="section-title">Video &amp; Output</div>
-      ${_folderRow('Video source', 'video_path',  cfg.video_path,  'Dashcam / onboard footage')}
-      ${_folderRow('Export folder','export_path', cfg.export_path, 'Where exported videos are saved')}
+      <div class="section-title">视频与输出</div>
+      ${_folderRow('视频源目录', 'video_path',  cfg.video_path,  '行车记录仪 / 车载视频')}
+      ${_folderRow('导出目录','export_path', cfg.export_path, '导出视频保存位置')}
     </section>
 
     <!-- RaceBox cloud -->
     <section class="settings-section">
-      <div class="section-title">RaceBox Cloud</div>
-      <p class="section-hint">Downloads sessions directly from racebox.pro. On first use a small login window opens — auth is saved for future downloads.</p>
+      <div class="section-title">RaceBox 云端</div>
+      <p class="section-hint">可直接从 racebox.pro 下载会话。首次使用会弹出登录窗口，授权信息会被保存。</p>
       <div id="rb-setup-wrap">
-        <div id="rb-pw-status" class="form-row" style="font-size:10px;color:var(--text3)">Checking…</div>
+        <div id="rb-pw-status" class="form-row" style="font-size:10px;color:var(--text3)">检测中…</div>
         <div class="form-row" id="rb-install-row">
-          <button class="btn btn-secondary" id="rb-install-btn">Download Login Component</button>
+          <button class="btn btn-secondary" id="rb-install-btn">下载登录组件</button>
           <span id="rb-install-msg" class="status-msg"></span>
         </div>
         <div id="rb-setup-log-wrap" class="hidden" style="margin-top:6px;">
           <textarea id="rb-setup-log" class="log-area" readonly
                     style="height:80px;font-size:10px;"
-                    placeholder="Install log…"></textarea>
+                    placeholder="安装日志…"></textarea>
         </div>
       </div>
       <div id="rb-ready-wrap" class="hidden">
         <div class="form-row">
-          <button class="btn btn-secondary" id="rb-login-btn">Check Auth</button>
-          <button class="btn btn-accent btn-sm" id="rb-download-btn">⬇ Download New Sessions</button>
-          <button class="btn btn-secondary btn-sm hidden" id="rb-cancel-btn">Cancel</button>
+          <button class="btn btn-secondary" id="rb-login-btn">检查授权</button>
+          <button class="btn btn-accent btn-sm" id="rb-download-btn">⬇ 下载新会话</button>
+          <button class="btn btn-secondary btn-sm hidden" id="rb-cancel-btn">取消</button>
           <span id="rb-login-msg" class="status-msg"></span>
         </div>
       </div>
@@ -92,7 +92,7 @@
         </div>
         <textarea id="rb-log" class="log-area" readonly
                   style="height:120px;font-size:10px;"
-                  placeholder="Download log will appear here…"></textarea>
+                  placeholder="下载日志会显示在这里…"></textarea>
       </div>
     </section>
 
@@ -109,19 +109,19 @@
 
     <!-- Encoder -->
     <section class="settings-section">
-      <div class="section-title">Encoder</div>
-      <p class="section-hint">OpenLap uses FFmpeg for video processing. These settings apply to every export.</p>
+      <div class="section-title">编码器</div>
+      <p class="section-hint">OpenLap 使用 FFmpeg 处理视频，这些设置会作用于每次导出。</p>
       <div class="form-row">
-        <label>Codec</label>
+        <label>编码格式</label>
         <select data-config-key="encoder" class="input-field">
-          <option value="libx264" ${cfg.encoder === 'libx264' || !cfg.encoder ? 'selected' : ''}>H.264 (libx264) — Universal</option>
-          <option value="libx265" ${cfg.encoder === 'libx265' ? 'selected' : ''}>H.265 (libx265) — Smaller files</option>
-          <option value="h264_nvenc" ${cfg.encoder === 'h264_nvenc' ? 'selected' : ''}>H.264 NVENC — NVIDIA GPU</option>
+          <option value="libx264" ${cfg.encoder === 'libx264' || !cfg.encoder ? 'selected' : ''}>H.264 (libx264) — 通用</option>
+          <option value="libx265" ${cfg.encoder === 'libx265' ? 'selected' : ''}>H.265 (libx265) — 文件更小</option>
+          <option value="h264_nvenc" ${cfg.encoder === 'h264_nvenc' ? 'selected' : ''}>H.264 NVENC — NVIDIA 显卡</option>
           <option value="h264_videotoolbox" ${cfg.encoder === 'h264_videotoolbox' ? 'selected' : ''}>H.264 VideoToolbox — Apple</option>
         </select>
       </div>
       <div class="form-row">
-        <label>Quality (CRF)</label>
+        <label>质量（CRF）</label>
         <div class="range-row">
           <input type="range" id="enc-crf" data-config-key="crf"
                  min="12" max="32" step="1" value="${cfg.crf ?? 18}">
@@ -129,12 +129,12 @@
         </div>
       </div>
       <div class="form-row">
-        <label>Workers</label>
+        <label>并发进程</label>
         <input type="number" data-config-key="workers" class="input-field input-narrow"
                value="${cfg.workers ?? 4}" min="1" max="16" step="1">
       </div>
       <div class="form-row" style="margin-top:8px">
-        <button class="btn btn-secondary" id="enc-check-btn">Detect Encoders</button>
+        <button class="btn btn-secondary" id="enc-check-btn">检测编码器</button>
         <span id="enc-msg" class="status-msg"></span>
       </div>
       <div id="enc-results" class="enc-results hidden"></div>
@@ -142,13 +142,13 @@
 
     <!-- Auto Sync -->
     <section class="settings-section">
-      <div class="section-title">Auto Sync</div>
-      <p class="section-hint">Automatically detect video-telemetry sync offset after each scan.
+      <div class="section-title">自动同步</div>
+      <p class="section-hint">每次扫描后自动检测视频-遥测同步偏移。
         Uses cross-correlation of G-force vs video motion (~20–60s per session).
         Only runs on sessions with no existing offset. Results are shown as "auto"
         in the Data tab — click Mark to confirm and promote to a user offset.</p>
       <div class="form-row">
-        <label>Enable auto-sync on scan</label>
+        <label>扫描后启用自动同步</label>
         <label class="toggle-switch">
           <input type="checkbox" data-config-key="auto_sync_enabled"
                  ${cfg.auto_sync_enabled ? 'checked' : ''}>
@@ -159,10 +159,10 @@
 
     <!-- About -->
     <section class="settings-section">
-      <div class="section-title">About</div>
-      <div class="about-row"><span class="about-key">Version</span><span class="about-val" id="about-version">—</span></div>
+      <div class="section-title">关于</div>
+      <div class="about-row"><span class="about-key">版本</span><span class="about-val" id="about-version">—</span></div>
       <div class="about-row"><span class="about-key">Python</span><span class="about-val" id="about-python">—</span></div>
-      <div class="about-row"><span class="about-key">Config</span>
+      <div class="about-row"><span class="about-key">配置文件</span>
         <span class="about-val" id="about-config" style="font-family:var(--mono); font-size:10px">—</span>
       </div>
     </section>
@@ -178,9 +178,9 @@
           <label>${_esc(label)}</label>
           <div class="path-row">
             <input type="text" data-config-key="${key}" class="input-field"
-                   value="${_esc(value || '')}" placeholder="Not configured"
+                   value="${_esc(value || '')}" placeholder="未配置"
                    style="font-family:var(--mono); font-size:10px;">
-            <button class="btn btn-secondary btn-sm" data-browse-key="${key}">Browse…</button>
+            <button class="btn btn-secondary btn-sm" data-browse-key="${key}">浏览…</button>
           </div>
         </div>
         ${hint ? `<div class="path-hint">${_esc(hint)}</div>` : ''}
@@ -214,17 +214,17 @@
         const setupWrap  = $('rb-setup-wrap');
         const readyWrap  = $('rb-ready-wrap');
         if (!s || !s.playwright) {
-          if (statusEl) statusEl.innerHTML = '<span style="color:var(--err)">● Browser engine not available in this build.</span>';
+          if (statusEl) statusEl.innerHTML = '<span style="color:var(--err)">● 当前构建不支持浏览器引擎。</span>';
           if (installRow) installRow.classList.add('hidden');
           return;
         }
         if (!s.chromium) {
-          if (statusEl) statusEl.innerHTML = '<span style="color:var(--warn)">○ Login component not installed — one-time ~130 MB download of Google Chromium (headless, only used to log into racebox.pro).</span>';
+          if (statusEl) statusEl.innerHTML = '<span style="color:var(--warn)">○ 登录组件未安装，需要一次性下载约 130MB 的 Chromium（无界面，仅用于登录 racebox.pro）。</span>';
           if (installRow) installRow.classList.remove('hidden');
           if (setupWrap)  setupWrap.classList.remove('hidden');
           if (readyWrap)  readyWrap.classList.add('hidden');
         } else {
-          if (statusEl) statusEl.innerHTML = '<span style="color:var(--ok)">● Login component ready.</span>';
+          if (statusEl) statusEl.innerHTML = '<span style="color:var(--ok)">● 登录组件已就绪。</span>';
           if (installRow) installRow.classList.add('hidden');
           if (setupWrap)  setupWrap.classList.remove('hidden');
           if (readyWrap)  readyWrap.classList.remove('hidden');
@@ -262,7 +262,7 @@
     $('rb-login-btn').addEventListener('click', async () => {
       const btn   = $('rb-login-btn');
       const msgEl = $('rb-login-msg');
-      btn.textContent       = 'Checking…';
+      btn.textContent       = '检查中…';
       btn.disabled          = true;
       btn.style.color       = '';
       btn.style.borderColor = '';
@@ -270,16 +270,16 @@
       try {
         const result = await API.raceboxLogin('', '');
         if (result?.ok) {
-          btn.textContent       = '✓ Auth OK';
+          btn.textContent       = '✓ 授权通过';
           btn.style.color       = 'var(--ok)';
           btn.style.borderColor = 'var(--ok)';
         } else {
-          btn.textContent = 'Check Auth';
+          btn.textContent = '检查授权';
           const notAvail = result?.error?.includes('Playwright') || result?.error?.includes('not available');
-          _setMsg(msgEl, result?.error || 'Not authenticated.', notAvail ? 'dim' : 'warn');
+          _setMsg(msgEl, result?.error || '未授权。', notAvail ? 'dim' : 'warn');
         }
       } catch (e) {
-        btn.textContent = 'Check Auth';
+        btn.textContent = '检查授权';
         _setMsg(msgEl, String(e), 'err');
       } finally {
         btn.disabled = false;
@@ -322,7 +322,7 @@
       _rbSetDownloading(false);
       const msgEl = $('rb-login-msg');
       const ok    = detail.ok !== false;
-      const msg   = detail.message || (ok ? 'Done.' : 'Failed.');
+      const msg   = detail.message || (ok ? '完成。' : '失败。');
       _setMsg(msgEl, msg, ok ? 'ok' : 'err');
       _rbAppendLog('── ' + msg);
       _rbSetProgress(ok ? 100 : 0);
@@ -336,14 +336,14 @@
       $('rb-log-wrap').classList.remove('hidden');
       _rbSetDownloading(true);
       _setMsg($('rb-login-msg'), '', 'dim');
-      _rbAppendLog('Starting download… (a browser may open for first-time login)');
+      _rbAppendLog('开始下载…（首次登录可能会打开浏览器窗口）');
       await API.downloadRaceboxSessions();
     });
 
     $('rb-cancel-btn').addEventListener('click', async () => {
       await API.cancelRaceboxDownload();
       _rbSetDownloading(false);
-      _rbAppendLog('Cancelling…');
+      _rbAppendLog('正在取消…');
     });
 
     // CRF slider label sync
@@ -355,14 +355,14 @@
     $('enc-check-btn').addEventListener('click', async () => {
       const msgEl     = $('enc-msg');
       const resultsEl = $('enc-results');
-      _setMsg(msgEl, 'Detecting…', 'dim');
+      _setMsg(msgEl, '检测中…', 'dim');
       $('enc-check-btn').disabled = true;
       resultsEl.classList.add('hidden');
 
       try {
         const result = await API.checkEncoders();
         if (!result) {
-          _setMsg(msgEl, 'FFmpeg not found.', 'err');
+          _setMsg(msgEl, '未找到 FFmpeg。', 'err');
           return;
         }
         if (result.error) {
@@ -370,13 +370,13 @@
           return;
         }
 
-        _setMsg(msgEl, `FFmpeg ${result.version || 'found'}.`, 'ok');
+        _setMsg(msgEl, `FFmpeg ${result.version || '已检测到'}。`, 'ok');
         const encoders = result.encoders || [];
         resultsEl.innerHTML = encoders.map(e =>
           `<div class="enc-row">
              <span class="enc-name">${_esc(e.name)}</span>
              <span class="enc-label">${_esc(e.label)}</span>
-             <span class="badge ${e.available ? 'badge-ok' : 'badge-muted'}">${e.available ? 'available' : 'unavailable'}</span>
+             <span class="badge ${e.available ? 'badge-ok' : 'badge-muted'}">${e.available ? '可用' : '不可用'}</span>
            </div>`
         ).join('');
         resultsEl.classList.remove('hidden');
@@ -393,9 +393,9 @@
         const el = $('aim-dll-status');
         if (!el) return;
         if (r && r.found) {
-          el.innerHTML = '<span style="color:var(--ok)">● MatLabXRK DLL found — AIM XRK conversion available.</span>';
+          el.innerHTML = '<span style="color:var(--ok)">● 已找到 MatLabXRK DLL，可使用 AIM XRK 转换。</span>';
         } else {
-          el.innerHTML = '<span style="color:var(--text3)">○ MatLabXRK DLL not found — AIM XRK conversion unavailable.</span>';
+          el.innerHTML = '<span style="color:var(--text3)">○ 未找到 MatLabXRK DLL，AIM XRK 转换不可用。</span>';
         }
       }).catch(() => {});
     }
@@ -413,7 +413,7 @@
 
     $('aim-dll-btn').addEventListener('click', () => {
       $('aim-dll-btn').disabled = true;
-      _setMsg($('aim-dll-msg'), 'Downloading…', 'dim');
+      _setMsg($('aim-dll-msg'), '下载中…', 'dim');
       API.downloadAimDll();
     });
 
@@ -452,7 +452,7 @@
 
     const msg = container.querySelector('#save-msg');
     if (msg) {
-      _setMsg(msg, 'Saved.', 'ok');
+      _setMsg(msg, '已保存。', 'ok');
       setTimeout(() => { if (msg) msg.textContent = ''; }, 2000);
     }
   }

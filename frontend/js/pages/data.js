@@ -112,7 +112,7 @@
     if (!pane) return;
 
     if (_sessions.length === 0) {
-      pane.innerHTML = `<div class="dl-empty">No sessions — configure folders in Settings and click Scan.</div>`;
+      pane.innerHTML = `<div class="dl-empty">暂无会话，请先在设置中配置目录后点击扫描。</div>`;
       return;
     }
 
@@ -190,7 +190,7 @@
 
     const s = _sessions.find(x => x.csv_path === _selCsv);
     if (!s) {
-      pane.innerHTML = `<div class="dr-empty">Select a session to see details and align video.</div>`;
+      pane.innerHTML = `<div class="dr-empty">请选择一个会话查看详情并校准视频。</div>`;
       return;
     }
 
@@ -206,33 +206,33 @@
     pane.innerHTML = `
 <!-- Info card -->
 <div class="dr-card">
-  <div class="dr-card-title">SESSION INFO</div>
+  <div class="dr-card-title">会话信息</div>
   <div class="dr-rows">
-    <div class="dr-row"><span class="dr-lbl">Source</span><span class="dr-val">${esc(s.source||'RaceBox')}</span></div>
+    <div class="dr-row"><span class="dr-lbl">来源</span><span class="dr-val">${esc(s.source||'RaceBox')}</span></div>
     <div class="dr-row">
-      <span class="dr-lbl">Track</span>
+      <span class="dr-lbl">赛道</span>
       <span class="dr-val dr-track-val" id="dr-track-display">
         ${esc(effectiveTrack||'—')}
         <button class="btn-inline-edit" id="dr-track-edit-btn" title="Edit track name" style="margin-left:4px;opacity:0.6;font-size:9px;cursor:pointer;border:none;background:none;color:var(--acc2);padding:0 2px">✎</button>
       </span>
     </div>
-    <div class="dr-row"><span class="dr-lbl">Date</span><span class="dr-val">${esc(fmtDateTime(s.csv_start))}</span></div>
-    <div class="dr-row"><span class="dr-lbl">Laps</span><span class="dr-val">${esc(m.laps||'—')}</span></div>
-    <div class="dr-row"><span class="dr-lbl">Best</span><span class="dr-val" style="color:var(--ok)">${esc(m.best||'—')}</span></div>
-    <div class="dr-row"><span class="dr-lbl">Video</span><span class="dr-val ${hasVid?'':'dr-warn'}">${hasVid ? `✓ ${vidPaths.length} clip(s)` : '✗ No match'}</span></div>
-    <div class="dr-row"><span class="dr-lbl">Offset</span><span class="dr-val ${off!=null?'':'dr-warn'}" id="dr-off-display">${
+    <div class="dr-row"><span class="dr-lbl">日期</span><span class="dr-val">${esc(fmtDateTime(s.csv_start))}</span></div>
+    <div class="dr-row"><span class="dr-lbl">圈数</span><span class="dr-val">${esc(m.laps||'—')}</span></div>
+    <div class="dr-row"><span class="dr-lbl">最佳</span><span class="dr-val" style="color:var(--ok)">${esc(m.best||'—')}</span></div>
+    <div class="dr-row"><span class="dr-lbl">视频</span><span class="dr-val ${hasVid?'':'dr-warn'}">${hasVid ? `✓ ${vidPaths.length} 段` : '✗ 未匹配'}</span></div>
+    <div class="dr-row"><span class="dr-lbl">偏移</span><span class="dr-val ${off!=null?'':'dr-warn'}" id="dr-off-display">${
       off!=null
         ? (s.sync_source === 'auto'
             ? `${off.toFixed(3)}s ~ auto`
             : `${off.toFixed(3)}s ✓`)
-        : 'not set'
+        : '未设置'
     }</span></div>
   </div>
   <div class="dr-actions">
-    <label class="dr-mode-label">Mode:
+    <label class="dr-mode-label">模式:
       <select class="input-field dr-mode-sel" id="dr-bike-sel">
-        <option value="car">Car</option>
-        <option value="bike"${(s.is_bike?' selected':'')}>Bike</option>
+        <option value="car">汽车</option>
+        <option value="bike"${(s.is_bike?' selected':'')}>摩托</option>
       </select>
     </label>
   </div>
@@ -241,10 +241,10 @@
 <!-- AIM conversion -->
 ${s.needs_conversion ? `
 <div class="dr-card" id="dr-conv-card">
-  <div class="dr-card-title">AIM XRK CONVERSION</div>
-  <div class="dr-hint">This session must be converted from XRK format before it can be used.</div>
+  <div class="dr-card-title">AIM XRK 转换</div>
+  <div class="dr-hint">该会话需先从 XRK 格式转换后才能使用。</div>
   <div class="dr-actions" style="margin-top:8px">
-    <button class="btn btn-secondary btn-sm" id="dr-conv-btn">Convert to CSV</button>
+    <button class="btn btn-secondary btn-sm" id="dr-conv-btn">转换为 CSV</button>
     <span id="dr-conv-msg" class="status-msg"></span>
   </div>
 </div>` : ''}
@@ -252,10 +252,10 @@ ${s.needs_conversion ? `
 <!-- Video align -->
 ${hasVid ? renderAlignCard(s, vidPaths, off) : `
 <div class="dr-card">
-  <div class="dr-card-title">VIDEO</div>
-  <div class="dr-hint" style="color:var(--warn)">No matching video found.</div>
+  <div class="dr-card-title">视频</div>
+  <div class="dr-hint" style="color:var(--warn)">未找到匹配视频。</div>
   <div class="dr-actions" style="margin-top:8px">
-    <button class="btn btn-secondary btn-sm" id="dr-assign-vid-btn">Browse for video…</button>
+    <button class="btn btn-secondary btn-sm" id="dr-assign-vid-btn">选择视频…</button>
     <span id="dr-assign-vid-msg" class="status-msg"></span>
   </div>
 </div>`}
@@ -263,7 +263,7 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
 <!-- Primary CTA: Open in Overlay -->
 <button class="btn btn-accent" id="dr-goto-overlay"
         style="width:100%; padding:9px; font-size:11px; font-weight:600; border-radius:var(--radius); flex-shrink:0; margin-top:auto;">
-  Open in Overlay →
+  打开到叠加编辑 →
 </button>
 `;
 
@@ -277,17 +277,17 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
     const autoNote  = isSyncing
       ? `<div style="font-size:9px;color:#ffb74d;margin-bottom:6px;padding:5px 6px;
                      background:rgba(255,183,77,0.08);border-radius:4px;border-left:2px solid #ffb74d">
-           Auto-detecting sync offset… scrub will be available once complete.
+           正在自动检测同步偏移… 完成后可拖动校准。
          </div>`
       : isAuto
       ? `<div style="font-size:9px;color:#64b5f6;margin-bottom:6px;padding:5px 6px;
                      background:rgba(100,181,246,0.08);border-radius:4px;border-left:2px solid #64b5f6">
-           Auto-detected: ${off != null ? off.toFixed(3)+'s' : '—'} — scrub to verify, then click Mark to confirm
+           自动检测结果：${off != null ? off.toFixed(3)+'s' : '—'} — 请拖动核对后点击确认
          </div>`
       : '';
     return `
 <div class="dr-card dr-align-card">
-  <div class="dr-card-title">ALIGN VIDEO</div>
+  <div class="dr-card-title">校准视频</div>
   ${autoNote}
   <video id="sync-video" class="sync-video" preload="metadata"
          src="${esc(videoUrl(vidPaths[0]))}"></video>
@@ -300,12 +300,12 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
   </div>
   <input type="range" id="sv-scrub" class="sync-scrub" min="0" max="1000" value="0" step="1">
   <div class="sync-mark-row">
-    <button class="btn btn-ok btn-sm" id="sv-mark">${isAuto ? '✓ Confirm Lap 1 start' : '🏁 Mark Lap 1 start'}</button>
+    <button class="btn btn-ok btn-sm" id="sv-mark">${isAuto ? '✓ 确认第1圈起点' : '🏁 标记第1圈起点'}</button>
     <input type="number" id="sv-off-input" class="input-field input-narrow sync-off-input"
            step="0.001" value="${esc(offVal)}" placeholder="0.000" title="Current offset (s) — follows video position">
     <span class="sync-mark-val" id="sv-mark-val">${off!=null && !isAuto ? '✓ saved' : ''}</span>
   </div>
-  ${vidPaths.length > 1 ? `<div style="font-size:9px;color:var(--text3);margin-top:4px">+ ${vidPaths.length-1} more clip(s)</div>` : ''}
+  ${vidPaths.length > 1 ? `<div style="font-size:9px;color:var(--text3);margin-top:4px">另有 ${vidPaths.length-1} 段视频</div>` : ''}
 </div>`;
   }
 
@@ -360,7 +360,7 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
         banner.remove();
         renderLeft();
       } catch (e) {
-        banner.innerHTML = `<span style="color:var(--err)">Error: ${esc(String(e))}</span>`;
+        banner.innerHTML = `<span style="color:var(--err)">错误：${esc(String(e))}</span>`;
       }
     });
 
@@ -436,7 +436,7 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
       const btn = pane.querySelector('#dr-conv-btn');
       const msg = pane.querySelector('#dr-conv-msg');
       btn.disabled = true;
-      if (msg) { msg.textContent = 'Converting…'; msg.className = 'status-msg status-dim'; }
+      if (msg) { msg.textContent = '转换中…'; msg.className = 'status-msg status-dim'; }
       try {
         const result = await API.convertXrkSession(s.csv_path);
         if (result && result.ok) {
@@ -444,7 +444,7 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
           s.needs_conversion = false;
           await doScan(true);
         } else {
-          if (msg) { msg.textContent = result?.error || 'Conversion failed.'; msg.className = 'status-msg status-err'; }
+          if (msg) { msg.textContent = result?.error || '转换失败。'; msg.className = 'status-msg status-err'; }
           btn.disabled = false;
         }
       } catch (e) {
@@ -458,7 +458,7 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
       const btn = pane.querySelector('#dr-assign-vid-btn');
       const msg = pane.querySelector('#dr-assign-vid-msg');
       btn.disabled = true;
-      const videoPath = await API.openFileDialog(['Video Files (*.mp4;*.mov;*.avi;*.mkv;*.MP4;*.MOV)']).catch(() => null);
+      const videoPath = await API.openFileDialog(['视频文件 (*.mp4;*.mov;*.avi;*.mkv;*.MP4;*.MOV)']).catch(() => null);
       if (!videoPath) { btn.disabled = false; return; }
       try {
         await API.assignVideo(s.csv_path, videoPath);
@@ -477,7 +477,7 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
           API.startAutoSync([s]).then(r => {
             if (r?.queued > 0) {
               _autoSyncing = true;
-              setStatus(`Video assigned — auto-syncing…`);
+              setStatus(`视频已绑定，自动同步中…`);
               if (_selCsv === s.csv_path) renderRight();
             }
           }).catch(() => {});
@@ -639,8 +639,8 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
     const footer = _container?.querySelector('#data-footer');
     if (!footer) return;
     const hint = _sessions.length
-      ? `${_sessions.length} session${_sessions.length !== 1 ? 's' : ''} — select one to get started.`
-      : 'Select a session to get started.';
+      ? `共 ${_sessions.length} 个会话，请选择一个开始。`
+      : '请选择一个会话开始。';
     footer.innerHTML = `<span class="footer-hint">${esc(hint)}</span>`;
   }
 
@@ -717,13 +717,13 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
     _config = _config || await API.getConfig();
     const paths = _config?.all_telemetry_paths || [];
     if (!paths.length) {
-      setStatus('No telemetry folders configured — go to Settings first.');
+      setStatus('未配置遥测目录，请先到设置页配置。');
       return;
     }
 
     _scanning = true;
     _autoSyncing = false;
-    setStatus(auto ? 'Auto-scanning…' : 'Scanning…');
+    setStatus(auto ? '自动扫描中…' : '扫描中…');
     _container?.querySelector('#scan-btn')?.setAttribute('disabled', '');
 
     try {
@@ -744,7 +744,7 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
       State.set('sessions', _sessions);
       _metaQueue = []; // reset queue so new sessions get fetched
       renderLeft();
-      setStatus(`${_sessions.length} session${_sessions.length!==1?'s':''} found.`);
+      setStatus(`已找到 ${_sessions.length} 个会话。`);
       enrichMeta(_sessions);
       // Persist the full merged list so next startup shows cached results immediately
       API.saveSessionsCache(_sessions).catch(() => {});
@@ -754,12 +754,12 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
         API.startAutoSync(candidates).then(r => {
           if (r?.queued > 0) {
             _autoSyncing = true;
-            setStatus(`${_sessions.length} sessions found — auto-syncing ${r.queued} session(s)…`);
+            setStatus(`已找到 ${_sessions.length} 个会话，正在自动同步 ${r.queued} 个会话…`);
           }
         }).catch(() => {});
       }
     } catch (e) {
-      setStatus('Scan failed: ' + e);
+      setStatus('扫描失败：' + e);
     }
 
     _scanning = false;
@@ -769,7 +769,7 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
   async function runAutoLapSplitFromJson() {
     try {
       setStatus('请选择赛道 JSON（包含起终线）…');
-      const jsonPath = await API.openFileDialog(['Track JSON (*.json)']);
+      const jsonPath = await API.openFileDialog(['赛道 JSON (*.json)']);
       if (!jsonPath) return;
 
       setStatus('请选择待切圈数据目录（gpx/vbo）…');
@@ -803,7 +803,7 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
       setStatus('正在启动手动画线切圈工具…');
       const res = await API.launchManualLapSplitGui();
       if (res?.started) {
-        setStatus('已启动手动画线工具（在 GPX/VBO 轨迹上画线）。保存后回到这里点 Scan。');
+        setStatus('已启动手动画线工具（在 GPX/VBO 轨迹上画线）。保存后回到这里点“扫描”。');
       } else {
         setStatus('手动画线工具启动失败。');
       }
@@ -887,7 +887,7 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
   <div class="toolbar">
     <div class="toolbar-left">
       <span class="page-title">Data</span>
-      <span class="status-text" id="scan-status">${esc(_statusMsg||'Loading…')}</span>
+      <span class="status-text" id="scan-status">${esc(_statusMsg||'加载中…')}</span>
     </div>
     <div class="toolbar-right">
       <div style="position:relative;display:inline-block">
@@ -897,7 +897,7 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
           <button class="btn btn-secondary" id="lap-split-opt-manual" style="width:100%;text-align:left">手动画起终点线</button>
         </div>
       </div>
-      <button class="btn btn-secondary" id="scan-btn">↺ Scan</button>
+      <button class="btn btn-secondary" id="scan-btn">↺ 扫描</button>
     </div>
   </div>
   <div class="page-divider"></div>
@@ -909,10 +909,10 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
       <div class="dl-header">
         <span class="dl-col dl-col-sync">Sync</span>
         <span class="dl-col dl-col-time">Time</span>
-        <span class="dl-col dl-col-track">Track</span>
-        <span class="dl-col dl-col-src">Source</span>
-        <span class="dl-col dl-col-num">Laps</span>
-        <span class="dl-col dl-col-num">Best</span>
+        <span class="dl-col dl-col-track">赛道</span>
+        <span class="dl-col dl-col-src">来源</span>
+        <span class="dl-col dl-col-num">圈数</span>
+        <span class="dl-col dl-col-num">最佳</span>
       </div>
       <div class="dl-scroll" id="data-left"></div>
     </div>
@@ -922,13 +922,13 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
 
     <!-- Right: detail + sync -->
     <div class="data-right-panel" id="data-right">
-      <div class="dr-empty">Select a session to see details and align video.</div>
+      <div class="dr-empty">请选择一个会话查看详情并校准视频。</div>
     </div>
 
   </div>
 
   <div class="data-footer" id="data-footer">
-    <span class="footer-hint">Select a session to get started.</span>
+    <span class="footer-hint">请选择一个会话开始。</span>
   </div>
 </div>`;
 
@@ -962,11 +962,11 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
       if (!s) return;
       if (detail.status === 'processing') {
         _asIdx = detail.current; _asTotal = detail.total;
-        setStatus(`Auto-syncing session ${_asIdx} of ${_asTotal}…`);
+        setStatus(`自动同步中：第 ${_asIdx}/${_asTotal} 个会话…`);
       } else if (detail.status === 'checking') {
         const conf = detail.confidence?.toFixed(2);
         const secs = detail.vid_t?.toFixed(0);
-        setStatus(`Auto-syncing session ${_asIdx} of ${_asTotal} — ${secs}s of video decoded, confidence ${conf}× (need 6×)`);
+        setStatus(`自动同步中：第 ${_asIdx}/${_asTotal} 个会话 — 已解码 ${secs}s 视频，置信度 ${conf}×（需 6×）`);
       } else if (detail.status === 'done') {
         _asDone++;
         // Don't overwrite if the user already confirmed this session while we were processing
@@ -985,11 +985,11 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
           _seekVideoAfterAutoSync(s, detail.offset);
         }
         const off = detail.offset >= 0 ? `+${detail.offset.toFixed(3)}s` : `${detail.offset.toFixed(3)}s`;
-        setStatus(`Auto-sync: offset detected ${off} at ${detail.confidence?.toFixed(2)}× confidence`);
+        setStatus(`自动同步：检测到偏移 ${off}，置信度 ${detail.confidence?.toFixed(2)}×`);
       } else if (detail.status === 'failed') {
         _asFailed++;
         s.auto_sync_failed = true;
-        setStatus(`Auto-sync: no confident match (${detail.confidence?.toFixed(2)}× confidence) — set offset manually`);
+        setStatus(`自动同步：未找到高置信匹配（${detail.confidence?.toFixed(2)}×），请手动设置偏移`);
         renderLeft();
         renderRight();
       }
@@ -997,9 +997,9 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
     _unlistenFns.push(API.on('auto_sync_done', () => {
       _autoSyncing = false;
       const summary = _asDone > 0 || _asFailed > 0
-        ? ` — ${_asDone} matched, ${_asFailed} skipped`
+        ? ` — 匹配 ${_asDone}，跳过 ${_asFailed}`
         : '';
-      setStatus(`${_sessions.length} session${_sessions.length !== 1 ? 's' : ''} found. Auto-sync complete${summary}.`);
+      setStatus(`已找到 ${_sessions.length} 个会话。自动同步完成${summary}。`);
     }));
 
     // Await the video server port before rendering so videoUrl() is correct from the start
@@ -1034,7 +1034,7 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
         applyOffsets();
         State.set('sessions', _sessions);
         renderLeft();
-        setStatus(`${_sessions.length} cached sessions — rescanning in background…`);
+        setStatus(`已加载 ${_sessions.length} 个缓存会话，后台重扫中…`);
         enrichMeta(_sessions);
         // Auto-scan in background
         setTimeout(() => doScan(true), 200);
@@ -1045,7 +1045,7 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
     }
 
     // No cache: auto-scan immediately
-    setStatus('Scanning…');
+    setStatus('扫描中…');
     doScan(true);
   }
 

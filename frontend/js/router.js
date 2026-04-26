@@ -37,7 +37,7 @@ const Router = (() => {
     } else {
       view.innerHTML = `<div class="empty-state">
         <div class="empty-icon">🚫</div>
-        <div class="empty-title">Page not found</div>
+        <div class="empty-title">页面不存在</div>
         <div>${name}</div>
       </div>`;
     }

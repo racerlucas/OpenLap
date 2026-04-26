@@ -50,34 +50,34 @@
   };
 
   const ALL_CHANNELS = [
-    { value: 'speed',       label: 'Speed' },
+    { value: 'speed',       label: '速度' },
     { value: 'rpm',         label: 'RPM' },
-    { value: 'exhaust_temp',label: 'Exhaust Temp' },
-    { value: 'gforce_lon',  label: 'Long G' },
-    { value: 'gforce_lat',  label: 'Lat G' },
-    { value: 'g_meter',     label: 'G-Meter' },
-    { value: 'lean',        label: 'Lean Angle' },
-    { value: 'altitude',    label: 'Altitude' },
-    { value: 'lap_time',    label: 'Lap Time' },
-    { value: 'delta_time',  label: 'Delta' },
-    { value: 'map',         label: 'Map' },
-    { value: 'info',        label: 'Session Info' },
-    { value: 'lap_info',    label: 'Lap Info' },
-    { value: 'multi',       label: 'Multi-Line' },
-    { value: 'image',       label: 'Image / Logo' },
+    { value: 'exhaust_temp',label: '排气温度' },
+    { value: 'gforce_lon',  label: '纵向 G' },
+    { value: 'gforce_lat',  label: '横向 G' },
+    { value: 'g_meter',     label: 'G 仪表' },
+    { value: 'lean',        label: '倾角' },
+    { value: 'altitude',    label: '海拔' },
+    { value: 'lap_time',    label: '圈速' },
+    { value: 'delta_time',  label: '差值' },
+    { value: 'map',         label: '地图' },
+    { value: 'info',        label: '会话信息' },
+    { value: 'lap_info',    label: '圈信息' },
+    { value: 'multi',       label: '多曲线' },
+    { value: 'image',       label: '图片 / Logo' },
   ];
 
   // Channels that can appear inside a Multi-Line gauge
   const MULTI_CHANNEL_OPTS = [
-    { value: 'speed',        label: 'Speed' },
+    { value: 'speed',        label: '速度' },
     { value: 'rpm',          label: 'RPM' },
-    { value: 'exhaust_temp', label: 'Exhaust Temp' },
-    { value: 'gforce_lon',   label: 'Long G' },
-    { value: 'gforce_lat',   label: 'Lat G' },
-    { value: 'lean',         label: 'Lean Angle' },
-    { value: 'altitude',     label: 'Altitude' },
-    { value: 'lap_time',     label: 'Lap Time' },
-    { value: 'delta_time',   label: 'Delta' },
+    { value: 'exhaust_temp', label: '排气温度' },
+    { value: 'gforce_lon',   label: '纵向 G' },
+    { value: 'gforce_lat',   label: '横向 G' },
+    { value: 'lean',         label: '倾角' },
+    { value: 'altitude',     label: '海拔' },
+    { value: 'lap_time',     label: '圈速' },
+    { value: 'delta_time',   label: '差值' },
   ];
 
   const GAUGE_COLOURS_LIST = [
@@ -549,7 +549,7 @@
       _rerenderLive();
     } catch (e) {
       console.error('[_loadLapData] failed for lap', lapIdx, e);
-      if (labelEl) labelEl.textContent = 'Telemetry load failed';
+      if (labelEl) labelEl.textContent = '遥测数据加载失败';
     }
   }
 
@@ -619,7 +619,7 @@
     const btn = _container?.querySelector('#stage-export-btn');
     if (btn) {
       const orig = btn.textContent;
-      btn.textContent = '✓ Added';
+      btn.textContent = '✓ 已添加';
       btn.disabled = true;
       setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1500);
     }
@@ -1055,7 +1055,7 @@
       return `
         <div style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px;">
           <div style="font-size:9px;color:var(--text3);margin-bottom:6px;
-                      text-transform:uppercase;letter-spacing:0.04em;">Rows to show</div>
+                      text-transform:uppercase;letter-spacing:0.04em;">显示行</div>
           ${LAP_INFO_ROWS.map(f => `
             <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;">
               <input type="checkbox" class="lapinfo-field-chk" data-field="${f.key}"
@@ -1074,12 +1074,12 @@
       return `
         <div style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px;">
           <div style="font-size:9px;color:var(--text3);margin-bottom:6px;
-                      text-transform:uppercase;letter-spacing:0.04em;">Image File</div>
+                      text-transform:uppercase;letter-spacing:0.04em;">图片文件</div>
           <div style="display:flex;gap:4px;align-items:center;">
             <input type="text" id="img-path-inp" class="input-field"
                    value="${_esc(path)}" placeholder="C:\\path\\to\\logo.png"
                    style="flex:1;font-size:9px;font-family:var(--mono);min-width:0;">
-            <button class="btn btn-sm" id="img-browse-btn" style="flex-shrink:0;">Browse</button>
+            <button class="btn btn-sm" id="img-browse-btn" style="flex-shrink:0;">浏览</button>
           </div>
           <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
             <label style="font-size:9px;color:var(--text2);white-space:nowrap;">Opacity</label>
@@ -1132,7 +1132,7 @@
           </div>
           <button class="btn btn-sm" id="map-osm-configure"
                   style="width:100%;margin-top:6px;font-size:10px;">
-            Configure Track Map
+            配置赛道地图
           </button>
           <div id="map-osm-status" style="font-size:9px;color:var(--text3);margin-top:5px;line-height:1.4;"></div>
           <div id="map-osm-picker" style="display:none;margin-top:8px;"></div>
@@ -1147,7 +1147,7 @@
       return `
         <div style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px;">
           <div style="font-size:9px;color:var(--text3);margin-bottom:6px;
-                      text-transform:uppercase;letter-spacing:0.04em;">Channels</div>
+                      text-transform:uppercase;letter-spacing:0.04em;">通道</div>
           <div id="multi-ch-list">
             ${keys.map((ch, i) => {
               const lbl = MULTI_CHANNEL_OPTS.find(o => o.value === ch)?.label || ch;
@@ -1162,7 +1162,7 @@
           </div>
           <div style="display:flex;gap:4px;margin-top:6px;">
             <select id="multi-add-sel" style="flex:1;font-size:10px;">${opts}</select>
-            <button class="btn btn-sm" id="multi-add-btn" style="flex-shrink:0;">+ Add</button>
+            <button class="btn btn-sm" id="multi-add-btn" style="flex-shrink:0;">+ 添加</button>
           </div>
         </div>`;
     }
@@ -1193,7 +1193,7 @@
 
       browseBtn?.addEventListener('click', async () => {
         const path = await API.openFileDialog(
-          ['Image Files (*.png *.jpg *.jpeg *.webp *.bmp)']
+          ['图片文件 (*.png *.jpg *.jpeg *.webp *.bmp)']
         );
         if (path) { inp.value = path; _applyPath(path); }
       });
@@ -1227,7 +1227,7 @@
 
         const csvPath = _liveSession?.csv_path;
         if (!csvPath) {
-          if (statusEl) statusEl.textContent = 'Load a session in the editor first.';
+          if (statusEl) statusEl.textContent = '请先在编辑器中加载会话。';
           return;
         }
 
@@ -1238,7 +1238,7 @@
         }
 
         picker.style.display = 'block';
-        picker.innerHTML = '<div style="font-size:9px;color:var(--text3);">Searching OSM…</div>';
+        picker.innerHTML = '<div style="font-size:9px;color:var(--text3);">正在搜索 OSM…</div>';
 
         try {
           const result = await API.getTrackMapCandidates(csvPath);
@@ -1246,10 +1246,10 @@
 
           if (!candidates.length) {
             picker.innerHTML = `<div style="font-size:9px;color:var(--text3);">
-              No motor racing circuits found nearby in OpenStreetMap.<br>
-              Make sure your track has <em>leisure=track + sport=motor_racing</em> tags.
+              在 OpenStreetMap 附近未找到赛车赛道。<br>
+              请确认赛道包含 <em>leisure=track + sport=motor_racing</em> 标签。
             </div>`;
-            if (statusEl) statusEl.textContent = 'No OSM circuits found nearby.';
+            if (statusEl) statusEl.textContent = '附近未找到 OSM 赛道。';
             return;
           }
 
@@ -1275,13 +1275,13 @@
             ? `<div class="osm-cand-row" data-osm-id=""
                 style="padding:5px 7px;border-radius:4px;cursor:pointer;margin-bottom:2px;font-size:10px;
                        background:var(--bg2);color:var(--text3);border:1px solid var(--border);">
-                Auto-detect (clear manual selection)
+                自动检测（清除手动选择）
               </div>`
             : '';
 
           picker.innerHTML = `
             <div style="font-size:9px;color:var(--text3);margin-bottom:5px;">
-              Circuits found near this track · click to select:
+              附近赛道列表 · 点击选择：
             </div>
             ${clearRow}${rows}`;
 
@@ -1296,8 +1296,8 @@
                 rebuildGaugeCanvases();
               }).catch(() => {});
               // Update UI: re-open picker to show new selection
-              const name = candidates.find(c => c.osm_id === osmId)?.name || 'Auto';
-              if (statusEl) statusEl.textContent = osmId ? `Using: ${name}` : 'Auto-detect';
+              const name = candidates.find(c => c.osm_id === osmId)?.name || '自动';
+              if (statusEl) statusEl.textContent = osmId ? `当前使用：${name}` : '自动检测';
               picker.style.display = 'none';
               rebuildGaugeCanvases();
             });
@@ -1307,13 +1307,13 @@
           if (statusEl) {
             const selName = candidates.find(c => c.osm_id === currentId)?.name;
             statusEl.textContent = selected_osm_id
-              ? `Using: ${selName || selected_osm_id}`
+              ? `当前使用：${selName || selected_osm_id}`
               : (auto_osm_id
-                  ? `Auto: ${candidates.find(c => c.osm_id === auto_osm_id)?.name || auto_osm_id}`
-                  : 'No circuit found nearby.');
+                  ? `自动：${candidates.find(c => c.osm_id === auto_osm_id)?.name || auto_osm_id}`
+                  : '附近未找到赛道。');
           }
         } catch (err) {
-          picker.innerHTML = `<div style="font-size:9px;color:var(--err);">Failed: ${err.message || err}</div>`;
+          picker.innerHTML = `<div style="font-size:9px;color:var(--err);">失败：${err.message || err}</div>`;
         }
       });
 
@@ -1426,7 +1426,7 @@
 
     if (_selected === null || !_layout?.gauges[_selected]) {
       panel.innerHTML = `<div style="color:var(--text3); font-size:11px; padding:12px">
-        Select a gauge to edit its properties.</div>`;
+        请选择一个仪表以编辑属性。</div>`;
       return;
     }
 
@@ -1440,28 +1440,28 @@
       <div style="padding:12px; display:flex; flex-direction:column; gap:8px;">
         <div style="font-size:10px; font-weight:700; color:var(--text2);
                     text-transform:uppercase; letter-spacing:0.04em; margin-bottom:4px">
-          Gauge Properties
+          仪表属性
         </div>
 
         <div class="form-row">
-          <span class="form-label">Channel</span>
+          <span class="form-label">通道</span>
           <select id="prop-channel" style="flex:1">
             ${ALL_CHANNELS.map(c => `<option value="${c.value}" ${c.value===g.channel?'selected':''}>${c.label}</option>`).join('')}
           </select>
         </div>
 
         <div class="form-row">
-          <span class="form-label">Style</span>
+          <span class="form-label">样式</span>
           <select id="prop-style" style="flex:1">${styleOptions}</select>
         </div>
 
         <div class="form-row">
-          <span class="form-label">Visible</span>
+          <span class="form-label">可见</span>
           <input type="checkbox" id="prop-visible" ${g.visible !== false ? 'checked' : ''}>
         </div>
 
         <div style="border-top:1px solid var(--border); padding-top:8px; margin-top:4px;">
-          <div style="font-size:9px; color:var(--text3); margin-bottom:6px;">Position (normalised 0–1)</div>
+          <div style="font-size:9px; color:var(--text3); margin-bottom:6px;">位置（归一化 0–1）</div>
           <div class="form-row">
             <span class="form-label" style="min-width:20px">X</span>
             <input type="number" id="prop-x" value="${g.x.toFixed(3)}" step="0.01" style="width:70px">
@@ -1480,7 +1480,7 @@
 
         <button class="btn btn-sm" id="prop-delete"
                 style="margin-top:8px; border-color:var(--err); color:var(--err);">
-          Remove Gauge
+          删除仪表
         </button>
       </div>`;
 
@@ -1555,7 +1555,7 @@
             <div style="font-size:9px; color:var(--text3)">${g.style}</div>
           </div>
           <button class="vis-toggle" data-vis-idx="${idx}"
-                  title="${visible ? 'Hide gauge' : 'Show gauge'}"
+                  title="${visible ? '隐藏仪表' : '显示仪表'}"
                   style="background:none;border:none;cursor:pointer;
                          font-size:13px;padding:2px 4px;color:var(--text2);
                          flex-shrink:0;line-height:1;">${visible ? '●' : '○'}</button>
@@ -1622,12 +1622,12 @@
     const sel = _container?.querySelector('#preset-select');
     if (!sel) return;
     const cur = _layout?.active_preset || '';
-    sel.innerHTML = `<option value="">— No Preset —</option>` +
+    sel.innerHTML = `<option value="">— 无预设 —</option>` +
       _presets.map(p => `<option value="${p}" ${p===cur?'selected':''}>${p}</option>`).join('');
   }
 
   async function saveAsPreset() {
-    const name = prompt('Preset name:');
+    const name = prompt('请输入预设名称：');
     if (!name) return;
     await API.saveOverlayAs(name, _layout);
     _layout.active_preset = name;
@@ -1685,7 +1685,7 @@
       : '';
 
     const hasVideo   = !!videoSrc;
-    const hintText   = hasVideo ? '' : 'Select a session on the Data page, then click Open in Overlay →';
+    const hintText   = hasVideo ? '' : '请先在“数据”页选择会话，然后点击“打开到叠加编辑”。';
     const videoStyle = `position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:0;opacity:${hasVideo ? '0.9' : '0'}`;
 
     // Use persisted video dimensions for the initial aspect-ratio so there is no
@@ -1701,32 +1701,32 @@
         <div style="padding:8px 16px; border-bottom:1px solid var(--border);
                     display:flex; align-items:center; gap:8px; flex-shrink:0;
                     background:var(--sidebar);">
-          <span style="font-size:12px; font-weight:700; color:var(--text)">Overlay</span>
+          <span style="font-size:12px; font-weight:700; color:var(--text)">叠加编辑</span>
 
           <!-- Lap selector -->
           <div style="display:flex;align-items:center;gap:3px;margin-left:8px;flex-shrink:0;">
-            <button class="btn btn-sm" id="lap-prev" title="Previous lap"
+            <button class="btn btn-sm" id="lap-prev" title="上一圈"
                     style="padding:2px 8px;" disabled>◀</button>
             <select id="lap-sel" style="font-size:10px;min-width:120px;">
-              <option value="">— no session —</option>
+              <option value="">— 未加载会话 —</option>
             </select>
-            <button class="btn btn-sm" id="lap-next" title="Next lap"
+            <button class="btn btn-sm" id="lap-next" title="下一圈"
                     style="padding:2px 8px;" disabled>▶</button>
           </div>
 
-          <select id="overlay-scope" title="Export scope"
+          <select id="overlay-scope" title="导出范围"
                   style="font-size:10px;flex-shrink:0;min-width:90px;">
-            <option value="selected_lap">This lap</option>
-            <option value="fastest">Fastest</option>
-            <option value="all_laps">All laps</option>
-            <option value="full">Full session</option>
+            <option value="selected_lap">当前圈</option>
+            <option value="fastest">最快圈</option>
+            <option value="all_laps">全部圈</option>
+            <option value="full">完整会话</option>
           </select>
           <button class="btn btn-sm" id="stage-export-btn"
-                  title="Add this lap to the export queue"
+                  title="将当前圈加入导出队列"
                   style="flex-shrink:0;border-color:var(--ok);color:var(--ok);">+ Export</button>
 
           <div style="flex:1"></div>
-          <label style="font-size:10px; color:var(--text2)">Theme</label>
+          <label style="font-size:10px; color:var(--text2)">主题</label>
           <select id="theme-select" style="font-size:10px;">
             <option value="Dark">Dark</option>
             <option value="Light">Light</option>
@@ -1735,10 +1735,10 @@
             <option value="Minimal">Minimal</option>
           </select>
           <select id="preset-select" style="font-size:10px; max-width:120px">
-            <option value="">— No Preset —</option>
+            <option value="">— 无预设 —</option>
           </select>
-          <button class="btn btn-sm" id="save-preset-btn">Save As…</button>
-          <button class="btn btn-sm btn-accent" id="save-layout-btn">Save</button>
+          <button class="btn btn-sm" id="save-preset-btn">另存为…</button>
+          <button class="btn btn-sm btn-accent" id="save-layout-btn">保存</button>
         </div>
 
         <!-- Main content row -->
@@ -1777,7 +1777,7 @@
                      style="flex:1;accent-color:var(--acc);cursor:pointer;">
               <span id="live-label" style="font-size:9px;color:var(--text3);flex-shrink:0;
                     max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-                ${hasVideo ? 'Loading telemetry…' : 'No session loaded'}
+                ${hasVideo ? '正在加载遥测数据…' : '未加载会话'}
               </span>
             </div>
           </div>
@@ -1786,27 +1786,27 @@
           <div style="width:280px;min-width:240px;display:flex;flex-direction:column;
                       border-left:1px solid var(--border);background:var(--sidebar);overflow:hidden;">
             <div style="padding:10px 12px;border-bottom:1px solid var(--border);flex-shrink:0;">
-              <button class="btn btn-sm btn-accent" id="add-gauge-btn" style="width:100%">+ Add Gauge</button>
+              <button class="btn btn-sm btn-accent" id="add-gauge-btn" style="width:100%">+ 添加仪表</button>
             </div>
             <div id="gauge-list" style="flex:1;overflow-y:auto;min-height:80px;"></div>
             <div id="prop-panel" style="border-top:1px solid var(--border);overflow-y:auto;flex-shrink:0;max-height:55%;">
-              <div style="color:var(--text3);font-size:11px;padding:12px">Select a gauge to edit its properties.</div>
+              <div style="color:var(--text3);font-size:11px;padding:12px">请选择一个仪表以编辑属性。</div>
             </div>
             <!-- Reference lap -->
             <div style="border-top:1px solid var(--border);padding:10px 12px;flex-shrink:0;">
               <div style="font-size:9px;font-weight:700;color:var(--text2);text-transform:uppercase;
-                          letter-spacing:0.05em;margin-bottom:6px;">Reference Lap</div>
+                          letter-spacing:0.05em;margin-bottom:6px;">参考圈</div>
               <select id="ref-mode-sel" style="width:100%;font-size:11px;">
-                <option value="none">None</option>
-                <option value="session_best">Best in session</option>
+                <option value="none">无</option>
+                <option value="session_best">会话最快圈</option>
                 <option value="session_best_so_far">Best yet (in session)</option>
                 <option value="personal_best">Personal best</option>
-                <option value="day_best">Best of the day</option>
-                <option value="manual">Manual…</option>
+                <option value="day_best">当日最快圈</option>
+                <option value="manual">手动选择…</option>
               </select>
               <div id="ref-manual-picker" style="display:none;margin-top:8px;max-height:200px;
                    overflow-y:auto;border:1px solid var(--border);border-radius:3px;padding:4px;">
-                <div id="ref-picker-content" style="font-size:10px;color:var(--text3)">Loading…</div>
+                <div id="ref-picker-content" style="font-size:10px;color:var(--text3)">加载中…</div>
               </div>
             </div>
           </div>
@@ -1851,18 +1851,18 @@
       if (!isManual) return;
 
       const content = container.querySelector('#ref-picker-content');
-      if (content) content.textContent = 'Loading laps…';
+      if (content) content.textContent = '正在加载圈次…';
 
       const ps = State.get('previewSession');
       if (!ps?.csv_path) {
-        if (content) content.textContent = 'No session loaded.';
+        if (content) content.textContent = '未加载会话。';
         return;
       }
 
       try {
         const groups = await API.getLapsForRefPicker(ps.csv_path);
         if (!groups?.length) {
-          if (content) content.textContent = 'No laps found for this track.';
+          if (content) content.textContent = '该赛道未找到可用圈次。';
           return;
         }
 
@@ -1901,7 +1901,7 @@
           });
         }
       } catch (e) {
-        if (content) content.textContent = `Error: ${e}`;
+        if (content) content.textContent = `错误：${e}`;
       }
     }
 
@@ -1921,7 +1921,7 @@
       await saveLayout();
       const btn = container.querySelector('#save-layout-btn');
       const orig = btn.textContent;
-      btn.textContent = 'Saved ✓';
+      btn.textContent = '已保存 ✓';
       setTimeout(() => { btn.textContent = orig; }, 1500);
     });
 
