@@ -82,6 +82,8 @@ class AppConfig:
     auto_sync_enabled: bool            = False
     track_map_selections: Dict[str, str] = field(default_factory=dict)
     # track_name_lower → osm_way_id; controls which OSM way is used as circuit outline
+    lap_flags: Dict[str, dict] = field(default_factory=dict)
+    # key = absolute CSV path, value = {'outlap': [lap_num...], 'inlap': [lap_num...]}
 
     def all_telemetry_paths(self) -> List[str]:
         """Return all unique non-empty telemetry paths to scan.
@@ -260,4 +262,5 @@ def _from_dict(data: dict) -> AppConfig:
         auto_sync_failed     = data.get('auto_sync_failed',     []),
         auto_sync_enabled    = bool(data.get('auto_sync_enabled', False)),
         track_map_selections = data.get('track_map_selections', {}),
+        lap_flags            = data.get('lap_flags', {}),
     )

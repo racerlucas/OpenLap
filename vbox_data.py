@@ -257,13 +257,16 @@ def load_vbo(path: str) -> Session:
         laps.append(Lap(lap_num=lap_num, points=pts, duration=dur,
                         is_outlap=(lap_num == 0)))
 
-    timed = [l for l in laps if l.lap_num > 0]
-    if len(timed) >= 3:
-        med = sorted(l.duration for l in timed)[len(timed) // 2]
-        if timed[-1].duration > med * _INLAP_SLOWNESS_THRESHOLD:
-            timed[-1].is_inlap = True
+    # Default policy for lap-tagged VBO: first lap is outlap, last lap is inlap.
+    # These tags can later be overridden manually in the UI.
+    for l in laps:
+        l.is_outlap = False
+        l.is_inlap = False
+    if len(laps) >= 2:
+        laps[0].is_outlap = True
+        laps[-1].is_inlap = True
 
-    best_lap_time = min((l.duration for l in timed), default=0.0)
+    best_lap_time = min((l.duration for l in laps if not l.is_outlap and not l.is_inlap), default=0.0)
     date_str = session_date.strftime('%Y-%m-%dT%H:%M:%SZ') if session_date else ''
 
     return Session(

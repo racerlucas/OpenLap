@@ -12,7 +12,9 @@ from typing import Callable, List, Optional
 
 def load_any_session(path: str):
     """Load a session from any supported format (RaceBox, AIM, GPX, MoTeC)."""
-    import gpx_data, aim_data, racebox_data, motec_data
+    import gpx_data, aim_data, racebox_data, motec_data, vbox_data
+    if vbox_data.is_vbox(path):
+        return vbox_data.load_vbo(path)
     if motec_data.is_motec_ld(path):
         return motec_data.load_ld(path)
     if gpx_data.is_gpx(path):
@@ -64,6 +66,7 @@ def run_export(
     ref_lap_csv_path:     str  = '',
     ref_lap_num:          int  = 0,
     track_map_selections: dict = None,
+    lap_flags: dict = None,
 ) -> None:
     """Render one or more sessions.  Designed to be called from a background thread."""
     from video_renderer import render_lap, RenderJob, concat_videos
@@ -73,6 +76,32 @@ def run_export(
     from app_config import load_scan_cache
 
     scan_cache = load_scan_cache()
+
+    def _apply_manual_lap_flags(sess, abs_csv_path: str):
+        if not sess or not getattr(sess, 'laps', None):
+            return
+        if not lap_flags:
+            return
+        row = lap_flags.get(abs_csv_path, {}) if isinstance(lap_flags, dict) else {}
+        out = set()
+        inn = set()
+        for v in row.get('outlap', []) if isinstance(row, dict) else []:
+            try:
+                out.add(int(v))
+            except Exception:
+                pass
+        for v in row.get('inlap', []) if isinstance(row, dict) else []:
+            try:
+                inn.add(int(v))
+            except Exception:
+                pass
+        if not out and not inn:
+            return
+        for l in sess.laps:
+            if l.lap_num in out:
+                l.is_outlap = True
+            if l.lap_num in inn:
+                l.is_inlap = True
 
     total_jobs = len(items)
     done_jobs  = 0
@@ -115,6 +144,7 @@ def run_export(
         # Apply per-session bike override, then compute lean angles when
         # the session is a bike but lean was not directly logged (e.g. AIM).
         abs_csv  = os.path.abspath(csv_path)
+        _apply_manual_lap_flags(sess, abs_csv)
         override = bike_overrides.get(abs_csv)
         if override is not None:
             sess.is_bike = override

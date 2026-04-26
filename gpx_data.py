@@ -342,7 +342,15 @@ def load_gpx(path: str) -> Session:
         laps = [Lap(lap_num=1, points=all_pts, duration=total_dur,
                     is_outlap=False, is_inlap=False)]
     else:
-        total_dur = max((l.duration for l in laps if not l.is_outlap), default=0.0)
+        # Default policy for lap-tagged GPX: first lap is outlap, last lap is inlap.
+        # These tags can later be overridden manually in the UI.
+        for l in laps:
+            l.is_outlap = False
+            l.is_inlap = False
+        if len(laps) >= 2:
+            laps[0].is_outlap = True
+            laps[-1].is_inlap = True
+        total_dur = max((l.duration for l in laps if not l.is_outlap and not l.is_inlap), default=0.0)
 
     # Extract a track name from the file
     trk_name_el = None

@@ -346,7 +346,7 @@ class WebviewAPI:
                 if not session:
                     return {'track': '', 'laps': '', 'best': '', 'best_secs': None}
                 laps = getattr(session, 'laps', [])
-                durs = [l.duration for l in laps if l.duration]
+                durs = [l.duration for l in laps if l.duration and not l.is_outlap and not l.is_inlap]
                 best = min(durs) if durs else None
                 return {
                     'track':     getattr(session, 'track', '') or '',
@@ -418,6 +418,26 @@ class WebviewAPI:
         except Exception:
             logger.exception('get_laps failed for %s', csv_path)
             return []
+
+    def set_lap_tag(self, csv_path: str, lap_num: int, tag: str, enabled: bool) -> dict:
+        """Manually set/clear outlap or inlap tag for a lap number."""
+        if tag not in ('outlap', 'inlap'):
+            return {'ok': False, 'error': 'tag must be outlap or inlap'}
+        abs_path = os.path.abspath(csv_path)
+        store = self._config.lap_flags.get(abs_path, {'outlap': [], 'inlap': []})
+        out = set(int(x) for x in store.get('outlap', []))
+        inn = set(int(x) for x in store.get('inlap', []))
+        target = out if tag == 'outlap' else inn
+        if enabled:
+            target.add(int(lap_num))
+        else:
+            target.discard(int(lap_num))
+        self._config.lap_flags[abs_path] = {
+            'outlap': sorted(out),
+            'inlap': sorted(inn),
+        }
+        self._config.save()
+        return {'ok': True}
 
     def load_lap_history(self, csv_path: str, lap_idx: int) -> list:
         """Return telemetry data points for one lap as a list of dicts."""
@@ -837,6 +857,7 @@ class WebviewAPI:
                 done_cb           = done_cb,
                 overlay_only          = params.get('overlay_only', False),
                 track_map_selections  = getattr(self._config, 'track_map_selections', {}) or {},
+                lap_flags             = getattr(self._config, 'lap_flags', {}) or {},
             )
         except Exception as e:
             done_cb(False, str(e))
@@ -1193,15 +1214,62 @@ class WebviewAPI:
             done(False, str(exc))
 
     # ── Internal helpers ──────────────────────────────────────────────────────
-    @staticmethod
-    def _load_session(csv_path: str):
+    def _load_session(self, csv_path: str):
         import gpx_data, aim_data, racebox_data, motec_data, vbox_data
         if vbox_data.is_vbox(csv_path):
-            return vbox_data.load_vbo(csv_path)
+            session = vbox_data.load_vbo(csv_path)
+            self._apply_lap_flags(session, csv_path)
+            return session
         if motec_data.is_motec_ld(csv_path):
-            return motec_data.load_ld(csv_path)
+            session = motec_data.load_ld(csv_path)
+            self._apply_lap_flags(session, csv_path)
+            return session
         if gpx_data.is_gpx(csv_path):
-            return gpx_data.load_gpx(csv_path)
+            session = gpx_data.load_gpx(csv_path)
+            self._apply_lap_flags(session, csv_path)
+            return session
         if aim_data.is_aim_csv(csv_path):
-            return aim_data.load_csv(csv_path)
-        return racebox_data.load_csv(csv_path)
+            session = aim_data.load_csv(csv_path)
+            self._apply_lap_flags(session, csv_path)
+            return session
+        session = racebox_data.load_csv(csv_path)
+        self._apply_lap_flags(session, csv_path)
+        return session
+
+    def _apply_lap_flags(self, session, csv_path: str) -> None:
+        """Apply default and manual outlap/inlap tags to a loaded session."""
+        if not session or not getattr(session, 'laps', None):
+            return
+        suffix = os.path.splitext(csv_path)[1].lower()
+
+        # Default for GPX/VBO: first lap outlap, last lap inlap.
+        if suffix in ('.gpx', '.vbo') and len(session.laps) >= 2:
+            for lap in session.laps:
+                lap.is_outlap = False
+                lap.is_inlap = False
+            session.laps[0].is_outlap = True
+            session.laps[-1].is_inlap = True
+
+        # Manual override from config.
+        abs_path = os.path.abspath(csv_path)
+        flags = self._config.lap_flags.get(abs_path, {}) if isinstance(self._config.lap_flags, dict) else {}
+        def _to_int_set(vals):
+            out = set()
+            for v in vals or []:
+                try:
+                    out.add(int(v))
+                except Exception:
+                    pass
+            return out
+        outlaps = _to_int_set(flags.get('outlap', []))
+        inlaps = _to_int_set(flags.get('inlap', []))
+        if outlaps or inlaps:
+            for lap in session.laps:
+                if lap.lap_num in outlaps:
+                    lap.is_outlap = True
+                if lap.lap_num in inlaps:
+                    lap.is_inlap = True
+
+        # Keep best_lap_time consistent with filtered timed laps.
+        timed_durs = [l.duration for l in session.timed_laps if l.duration]
+        session.best_lap_time = min(timed_durs) if timed_durs else 0.0

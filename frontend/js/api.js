@@ -64,6 +64,7 @@ const API = (() => {
       cancel_auto_sync:              () => null,
       auto_split_laps_from_json:     () => ({ processed: [], skipped: [] }),
       launch_manual_lap_split_gui:   () => ({ started: true, pid: 0 }),
+      set_lap_tag:                   () => ({ ok: true }),
     };
     const fn = mocks[method];
     return fn ? fn() : null;
@@ -135,5 +136,6 @@ const API = (() => {
     cancelAutoSync:             ()                   => call('cancel_auto_sync'),
     autoSplitLapsFromJson:      (jsonPath, inputDir, outputDir) => call('auto_split_laps_from_json', jsonPath, inputDir, outputDir),
     launchManualLapSplitGui:    ()                   => call('launch_manual_lap_split_gui'),
+    setLapTag:                  (csvPath, lapNum, tag, enabled) => call('set_lap_tag', csvPath, lapNum, tag, enabled),
   };
 })();

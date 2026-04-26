@@ -13,7 +13,7 @@
 
 ### 1）下载
 
-前往 [Releases](https://github.com/LaurensVR3/OpenLap/releases/latest) 下载最新版压缩包。
+前往 [Releases](https://github.com/racerlucas/OpenLap/releases/latest) 下载最新版压缩包。
 
 ### 2）解压
 

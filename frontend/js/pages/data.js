@@ -260,6 +260,8 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
   </div>
 </div>`}
 
+${renderLapTagCard(s)}
+
 <!-- Primary CTA: Open in Overlay -->
 <button class="btn btn-accent" id="dr-goto-overlay"
         style="width:100%; padding:9px; font-size:11px; font-weight:600; border-radius:var(--radius); flex-shrink:0; margin-top:auto;">
@@ -306,6 +308,33 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
     <span class="sync-mark-val" id="sv-mark-val">${off!=null && !isAuto ? '✓ saved' : ''}</span>
   </div>
   ${vidPaths.length > 1 ? `<div style="font-size:9px;color:var(--text3);margin-top:4px">另有 ${vidPaths.length-1} 段视频</div>` : ''}
+</div>`;
+  }
+
+  function renderLapTagCard(s) {
+    const laps = _lapDetails[s.csv_path] || [];
+    if (!laps.length) return '';
+    return `
+<div class="dr-card">
+  <div class="dr-card-title">圈标签（手动）</div>
+  <div class="dr-hint" style="margin-bottom:6px">默认首圈为 outlap、末圈为 inlap，可在这里手动设置。</div>
+  <div style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:6px">
+    ${laps.map((lap, idx) => `
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 2px;border-bottom:${idx===laps.length-1?'none':'1px solid var(--line)'}">
+        <span style="font-size:10px;color:var(--text2)">Lap ${lap.lap_num ?? (idx + 1)}</span>
+        <div style="display:flex;gap:10px;align-items:center">
+          <label style="font-size:10px;display:flex;gap:4px;align-items:center">
+            <input type="checkbox" class="lap-tag-toggle" data-lap-num="${lap.lap_num}" data-tag="outlap" ${lap.is_outlap ? 'checked' : ''}>
+            outlap
+          </label>
+          <label style="font-size:10px;display:flex;gap:4px;align-items:center">
+            <input type="checkbox" class="lap-tag-toggle" data-lap-num="${lap.lap_num}" data-tag="inlap" ${lap.is_inlap ? 'checked' : ''}>
+            inlap
+          </label>
+        </div>
+      </div>
+    `).join('')}
+  </div>
 </div>`;
   }
 
@@ -499,6 +528,25 @@ ${hasVid ? renderAlignCard(s, vidPaths, off) : `
 
     // Video sync
     wireVideoSync(s, pane);
+
+    // Manual lap tag toggles
+    pane.querySelectorAll('.lap-tag-toggle').forEach(el => {
+      el.addEventListener('change', async e => {
+        const lapNum = parseInt(e.target.dataset.lapNum);
+        const tag = e.target.dataset.tag;
+        const enabled = !!e.target.checked;
+        try {
+          await API.setLapTag(s.csv_path, lapNum, tag, enabled);
+          _lapDetails[s.csv_path] = await API.getLaps(s.csv_path);
+          _meta[s.csv_path] = await API.getSessionMeta(s.csv_path);
+          recomputeDayBest();
+          renderLeft();
+          if (_selCsv === s.csv_path) renderRight();
+        } catch (err) {
+          setStatus('圈标签设置失败：' + String(err));
+        }
+      });
+    });
   }
 
   function wireVideoSync(s, pane) {
