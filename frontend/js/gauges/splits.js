@@ -80,22 +80,22 @@ const GaugeSplits = {
 
       // Ref time
       ctx.fillStyle = '#888888';
-      ctx.fillText(s.ref_t != null ? s.ref_t.toFixed(2) : '\u2014', COL_REF, rowY);
+      ctx.fillText(s.ref_t != null ? s.ref_t.toFixed(3) : '\u2014', COL_REF, rowY);
 
       if (s.cur_t != null) {
         // Current time
         ctx.fillStyle = theme.text;
-        ctx.fillText(s.cur_t.toFixed(2), COL_CUR, rowY);
+        ctx.fillText(s.cur_t.toFixed(3), COL_CUR, rowY);
 
         // Delta
         if (s.delta != null) {
           let dCol;
-          if (Math.abs(s.delta) < 0.01)  dCol = '#e8e8e8';
+          if (Math.abs(s.delta) < 0.001) dCol = '#e8e8e8';
           else if (s.delta < 0)           dCol = '#22dd66';
           else                            dCol = '#ff4444';
           ctx.fillStyle = dCol;
           ctx.font      = `bold ${fsRow}px 'Segoe UI', sans-serif`;
-          ctx.fillText((s.delta >= 0 ? '+' : '') + s.delta.toFixed(2), COL_DIFF, rowY);
+          ctx.fillText((s.delta >= 0 ? '+' : '') + s.delta.toFixed(3), COL_DIFF, rowY);
           ctx.font      = `${fsRow}px 'Segoe UI', sans-serif`;
         }
       } else {

@@ -19,11 +19,10 @@ from __future__ import annotations
 import logging
 import math
 import os
-from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-from data_model import DataPoint, Lap, Session
+from data_model import DataPoint, Session, build_laps_from_points
 from exceptions import NoDataRowsError
 
 logger = logging.getLogger(__name__)
@@ -199,20 +198,7 @@ def load_csv(path: str) -> Session:
         )
         all_pts.append(pt)
 
-    # Group into laps and compute lap_elapsed
-    buckets: Dict[int, List[DataPoint]] = defaultdict(list)
-    for pt in all_pts:
-        buckets[pt.lap].append(pt)
-
-    laps: List[Lap] = []
-    for lap_num in sorted(buckets.keys()):
-        pts = buckets[lap_num]
-        lap_t0 = pts[0].elapsed
-        for pt in pts:
-            pt.lap_elapsed = pt.elapsed - lap_t0
-        dur = pts[-1].elapsed - pts[0].elapsed
-        laps.append(Lap(lap_num=lap_num, points=pts, duration=dur,
-                        is_outlap=(lap_num == 0)))
+    laps = build_laps_from_points(all_pts, outlap_lap_num=0)
 
     # Classify non-timed laps
     timed = [l for l in laps if l.lap_num > 0]

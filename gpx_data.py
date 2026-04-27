@@ -25,7 +25,7 @@ from typing import List, Optional
 
 import numpy as np
 
-from data_model import DataPoint, Lap, Session
+from data_model import DataPoint, Lap, Session, build_laps_from_points
 from exceptions import NoDataRowsError, MissingHeaderError
 
 logger = logging.getLogger(__name__)
@@ -183,14 +183,20 @@ def load_gpx(path: str) -> Session:
                             break
 
                 lap_num: Optional[int] = None
+                lap_elapsed_hint: Optional[float] = None
                 if ext_el is not None:
                     for child in ext_el.iter():
-                        if _local(child).lower() == 'lap':
+                        loc = _local(child).lower()
+                        if loc == 'lap':
                             try:
                                 lap_num = int(float((child.text or '').strip()))
                             except (ValueError, TypeError):
                                 lap_num = None
-                            break
+                        elif loc in ('lap_elapsed_s', 'lap_elapsed', 'lapelapsed'):
+                            try:
+                                lap_elapsed_hint = float((child.text or '').strip())
+                            except (ValueError, TypeError):
+                                lap_elapsed_hint = None
 
                 raw.append({
                     'lat':       lat,
@@ -199,6 +205,7 @@ def load_gpx(path: str) -> Session:
                     'time':      ts,
                     'ext_speed': ext_speed,   # m/s or None
                     'lap':       lap_num,
+                    'lap_elapsed_hint': lap_elapsed_hint,
                 })
 
     if not raw:
@@ -309,32 +316,12 @@ def load_gpx(path: str) -> Session:
             gyro_y      = 0.0,
             gyro_z      = 0.0,
             elapsed     = float(elapsed[i]),
-            lap_elapsed = float(elapsed[i]),
+            lap_elapsed = float(timed[i].get('lap_elapsed_hint')) if timed[i].get('lap_elapsed_hint') is not None else float(elapsed[i]),
         )
         all_pts.append(pt)
 
     # ── Build laps ─────────────────────────────────────────────────────────────
-    from collections import defaultdict
-    buckets = defaultdict(list)
-    for pt in all_pts:
-        buckets[pt.lap].append(pt)
-
-    laps: List[Lap] = []
-    for lap_num in sorted(buckets.keys()):
-        pts = buckets[lap_num]
-        if not pts:
-            continue
-        lap_t0 = pts[0].elapsed
-        for pt in pts:
-            pt.lap_elapsed = pt.elapsed - lap_t0
-        lap_dur = pts[-1].elapsed - pts[0].elapsed
-        laps.append(Lap(
-            lap_num=lap_num,
-            points=pts,
-            duration=lap_dur,
-            is_outlap=(lap_num == 0),
-            is_inlap=False,
-        ))
+    laps = build_laps_from_points(all_pts, outlap_lap_num=0)
 
     # If no explicit lap metadata exists, keep legacy single-lap behaviour.
     if len(laps) <= 1:
@@ -343,11 +330,12 @@ def load_gpx(path: str) -> Session:
                     is_outlap=False, is_inlap=False)]
     else:
         # Default policy for lap-tagged GPX: first lap is outlap, last lap is inlap.
+        # Keep at least one timed lap for 2-lap files.
         # These tags can later be overridden manually in the UI.
         for l in laps:
             l.is_outlap = False
             l.is_inlap = False
-        if len(laps) >= 2:
+        if len(laps) >= 3:
             laps[0].is_outlap = True
             laps[-1].is_inlap = True
         total_dur = max((l.duration for l in laps if not l.is_outlap and not l.is_inlap), default=0.0)

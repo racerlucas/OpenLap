@@ -16,13 +16,12 @@ from __future__ import annotations
 
 import logging
 import re
-from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from math import floor
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from data_model import DataPoint, Lap, Session
+from data_model import DataPoint, Session, build_laps_from_points
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +144,7 @@ def load_vbo(path: str) -> Session:
     idx_lon_g   = _find('longitudinal-acc', 'longitudinal acc', 'ax', 'longacc', 'long_acc')
     idx_vert_g  = _find('az', 'vertical-acc', 'vertical acc')
     idx_lap     = _find('lap', 'lap trigger', 'lap-trigger', 'lapctr', 'lap beacon', 'lap count')
+    idx_lap_elapsed = _find('lap_elapsed_s', 'lap_elapsed', 'lapelapsed')
     idx_rpm     = _find('rpm')
     idx_yaw     = _find('yaw rate', 'yaw-rate')
 
@@ -238,6 +238,7 @@ def load_vbo(path: str) -> Session:
 
         # lap trigger increments at each beacon crossing (0 = outlap)
         lap_num = int(_col(idx_lap)) if idx_lap is not None else 1
+        lap_elapsed_hint = _col(idx_lap_elapsed, 0.0) if idx_lap_elapsed is not None else 0.0
 
         all_pts.append(DataPoint(
             record     = record_idx,
@@ -254,6 +255,7 @@ def load_vbo(path: str) -> Session:
             gyro_y     = 0.0,
             gyro_z     = yaw,
             rpm        = rpm,
+            lap_elapsed= max(0.0, lap_elapsed_hint),
         ))
 
     if not all_pts:
@@ -267,28 +269,15 @@ def load_vbo(path: str) -> Session:
 
     # ── Build laps ────────────────────────────────────────────────────────────
 
-    buckets: Dict[int, List[DataPoint]] = defaultdict(list)
-    for pt in all_pts:
-        buckets[pt.lap].append(pt)
-
-    laps: List[Lap] = []
-    for lap_num in sorted(buckets.keys()):
-        pts = buckets[lap_num]
-        if not pts:
-            continue
-        lap_t0 = pts[0].time
-        for pt in pts:
-            pt.lap_elapsed = (pt.time - lap_t0).total_seconds()
-        dur = (pts[-1].time - pts[0].time).total_seconds()
-        laps.append(Lap(lap_num=lap_num, points=pts, duration=dur,
-                        is_outlap=(lap_num == 0)))
+    laps = build_laps_from_points(all_pts, outlap_lap_num=0)
 
     # Default policy for lap-tagged VBO: first lap is outlap, last lap is inlap.
+    # Keep at least one timed lap for 2-lap files.
     # These tags can later be overridden manually in the UI.
     for l in laps:
         l.is_outlap = False
         l.is_inlap = False
-    if len(laps) >= 2:
+    if len(laps) >= 3:
         laps[0].is_outlap = True
         laps[-1].is_inlap = True
 

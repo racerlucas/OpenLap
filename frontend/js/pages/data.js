@@ -17,6 +17,7 @@
   let _meta       = {};   // csv_path → {track, laps, best}
   let _lapDetails = {};   // csv_path → [{lap_idx, duration, is_best}]
   let _selCsv     = null; // currently selected session csv_path
+  let _splitSel   = new Set(); // csv_path set for batch lap-split
   let _config     = null;
   let _scanning    = false;
   let _autoSyncing = false;
@@ -131,11 +132,22 @@
     pane.querySelectorAll('.dl-row').forEach(row => {
       row.addEventListener('click', () => selectSession(row.dataset.csv));
     });
+    pane.querySelectorAll('.dl-sel').forEach(cb => {
+      cb.addEventListener('click', (e) => e.stopPropagation());
+      cb.addEventListener('change', (e) => {
+        const csv = e.target.dataset.csv;
+        if (!csv) return;
+        if (e.target.checked) _splitSel.add(csv);
+        else _splitSel.delete(csv);
+        refreshFooter();
+      });
+    });
   }
 
   function sessionRow(s) {
     const m       = _meta[s.csv_path] || {};
     const isSel   = s.csv_path === _selCsv;
+    const isSplitSel = _splitSel.has(s.csv_path);
     const isDayB  = _dayBest[s.csv_path];
     const timeMatch = s.csv_start ? String(s.csv_start).match(/^[0-9-]+[T ](\d{2}):(\d{2})/) : null;
     const time = timeMatch ? `${timeMatch[1]}:${timeMatch[2]}`
@@ -156,6 +168,9 @@
                     : 'di-unsync';
 
     return `<div class="dl-row${isSel?' sel':''}${isDayB?' day-best':''}" data-csv="${esc(s.csv_path)}">
+      <span class="dl-col" style="display:flex;justify-content:center;align-items:center">
+        <input type="checkbox" class="dl-sel" data-csv="${esc(s.csv_path)}" ${isSplitSel ? 'checked' : ''} title="用于批量切圈">
+      </span>
       <span class="dl-sync ${iconCls}">${syncLabel}</span>
       <span class="dl-time">${esc(time)}</span>
       <span class="dl-track" title="${esc(s.csv_path)}">${esc(track)}</span>
@@ -771,8 +786,11 @@ ${renderLapTagCard(s)}
   function refreshFooter() {
     const footer = _container?.querySelector('#data-footer');
     if (!footer) return;
+    const splitN = _splitSel.size;
     const hint = _sessions.length
-      ? `共 ${_sessions.length} 节，请选择一节开始。`
+      ? (splitN > 0
+          ? `共 ${_sessions.length} 节，已勾选 ${splitN} 节用于批量切圈。`
+          : `共 ${_sessions.length} 节，请选择一节开始。`)
       : '请选择一节开始。';
     footer.innerHTML = `<span class="footer-hint">${esc(hint)}</span>`;
   }
@@ -866,6 +884,16 @@ ${renderLapTagCard(s)}
         all.push(...r);
       }
       _sessions = all;
+      // Prune batch selections that are no longer present.
+      const existing = new Set(_sessions.map(s => s.csv_path));
+      _splitSel = new Set([..._splitSel].filter(p => existing.has(p)));
+      // Seed metadata immediately from scan result so laps/best show without delay.
+      for (const s of _sessions) {
+        if (!_meta[s.csv_path]) _meta[s.csv_path] = {};
+        if (s.track) _meta[s.csv_path].track = s.track;
+        if (s.laps) _meta[s.csv_path].laps = s.laps;
+        if (s.best) _meta[s.csv_path].best = s.best;
+      }
       // Apply stored offsets and sources
       for (const s of _sessions) {
         if (_config?.offsets?.[s.csv_path] != null) {
@@ -968,15 +996,22 @@ ${renderLapTagCard(s)}
 
   async function runAutoLapSplitFromJson() {
     try {
-      if (!_selCsv) {
-        setStatus('请先在左侧选中一节（.gpx/.vbo）再执行切圈。');
+      const targetsRaw = (_splitSel.size > 0)
+        ? _sessions.filter(s => _splitSel.has(s.csv_path))
+        : (_selCsv ? _sessions.filter(s => s.csv_path === _selCsv) : []);
+      if (!targetsRaw.length) {
+        setStatus('请先在左侧选中一节（.gpx/.vbo）或勾选多节再执行切圈。');
         return;
       }
-      const lower = String(_selCsv).toLowerCase();
-      if (!(lower.endsWith('.gpx') || lower.endsWith('.vbo'))) {
-        setStatus('当前节次不是 .gpx/.vbo，暂不支持自动切圈。');
+      const targets = targetsRaw.filter(s => {
+        const lower = String(s.csv_path || '').toLowerCase();
+        return lower.endsWith('.gpx') || lower.endsWith('.vbo');
+      });
+      if (!targets.length) {
+        setStatus('所选节次都不是 .gpx/.vbo，暂不支持自动切圈。');
         return;
       }
+      const skippedType = targetsRaw.length - targets.length;
 
       let jsonPath = '';
       const tracks = await API.listTrackJsons().catch(() => []);
@@ -985,15 +1020,14 @@ ${renderLapTagCard(s)}
         if (!selected) return;
         setStatus(`已选择赛道：${selected.display_name || selected.name}`);
         jsonPath = selected.path;
-        // Persist selected track to current session so right-panel "赛道" auto-fills.
-        const s = _sessions.find(x => x.csv_path === _selCsv);
-        if (s) {
-          const pickedTrackName = (selected.display_name || selected.name || '').trim();
-          if (pickedTrackName) {
-            const existing = _config?.session_info?.[_selCsv] || {};
-            await API.editSessionInfo(_selCsv, { ...existing, info_track: pickedTrackName });
+        // Persist selected track to all target sessions so right-panel "赛道" auto-fills.
+        const pickedTrackName = (selected.display_name || selected.name || '').trim();
+        if (pickedTrackName) {
+          for (const s of targets) {
+            const existing = _config?.session_info?.[s.csv_path] || {};
+            await API.editSessionInfo(s.csv_path, { ...existing, info_track: pickedTrackName });
             if (!_config.session_info) _config.session_info = {};
-            _config.session_info[_selCsv] = { ...existing, info_track: pickedTrackName };
+            _config.session_info[s.csv_path] = { ...existing, info_track: pickedTrackName };
           }
         }
       } else {
@@ -1004,23 +1038,27 @@ ${renderLapTagCard(s)}
 
       const btn = _container?.querySelector('#lap-split-btn');
       if (btn) btn.setAttribute('disabled', '');
-      setStatus('正在对当前选中节次执行切圈…');
+      setStatus(`正在执行批量切圈…（目标 ${targets.length} 节）`);
 
-      const res = await API.autoSplitLapForFile(jsonPath, _selCsv);
-      const n = (res?.processed || []).length;
-      const k = (res?.skipped || []).length;
-      setStatus(`切圈完成：${n} 个成功，${k} 个跳过。正在刷新当前节次…`);
+      let n = 0;
+      let k = skippedType;
+      for (let i = 0; i < targets.length; i++) {
+        const s = targets[i];
+        setStatus(`正在切圈 ${i + 1}/${targets.length}：${baseName(s.csv_path)}`);
+        const res = await API.autoSplitLapForFile(jsonPath, s.csv_path).catch(() => ({ processed: [], skipped: [s.csv_path] }));
+        n += (res?.processed || []).length;
+        k += (res?.skipped || []).length;
+      }
+      setStatus(`切圈完成：${n} 个成功，${k} 个跳过。正在刷新…`);
 
-      const selectedCsv = _selCsv;
-      const s = _sessions.find(x => x.csv_path === selectedCsv);
-      if (s) {
-        delete _meta[selectedCsv];
-        delete _lapDetails[selectedCsv];
+      for (const s of targets) {
+        delete _meta[s.csv_path];
+        delete _lapDetails[s.csv_path];
         await enrichMeta([s]);
         await loadLaps(s);
-        // Keep current selection and video/sync context; only refresh current detail.
-        if (_selCsv === selectedCsv) renderRight();
       }
+      renderLeft();
+      if (_selCsv) renderRight();
       setStatus(`切圈完成：${n} 个成功，${k} 个跳过。`);
     } catch (e) {
       setStatus('切圈失败：' + String(e));
@@ -1232,6 +1270,7 @@ ${renderLapTagCard(s)}
     <!-- Left: session list -->
     <div class="data-left-panel" id="data-left-panel">
       <div class="dl-header">
+        <span class="dl-col" style="text-align:center">批量</span>
         <span class="dl-col dl-col-sync">Sync</span>
         <span class="dl-col dl-col-time">Time</span>
         <span class="dl-col dl-col-track">赛道</span>

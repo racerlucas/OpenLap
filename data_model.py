@@ -8,7 +8,7 @@ racebox_data.py.
 from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 @dataclass
@@ -141,11 +141,95 @@ class Session:
             return p0
         a = (elapsed - p0.elapsed) / dt
         L = lambda attr: getattr(p0, attr) + (getattr(p1, attr) - getattr(p0, attr)) * a
+        lap_num = p0.lap
+        lap_elapsed = L('lap_elapsed')
+        if p1.lap != p0.lap:
+            cross_elapsed = estimate_lap_crossing_elapsed(p0, p1)
+            if elapsed >= cross_elapsed:
+                lap_num = p1.lap
+                lap_elapsed = max(0.0, elapsed - cross_elapsed)
+            else:
+                lap_num = p0.lap
+                lap_elapsed = max(0.0, p0.lap_elapsed + (elapsed - p0.elapsed))
         return DataPoint(
             record=p0.record, time=p0.time,
             lat=L('lat'), lon=L('lon'), alt=L('alt'), speed=L('speed'),
             gforce_x=L('gforce_x'), gforce_y=L('gforce_y'), gforce_z=L('gforce_z'),
-            lap=p0.lap, gyro_x=L('gyro_x'), gyro_y=L('gyro_y'), gyro_z=L('gyro_z'),
-            lean_angle=L('lean_angle'), elapsed=elapsed, lap_elapsed=L('lap_elapsed'),
+            lap=lap_num, gyro_x=L('gyro_x'), gyro_y=L('gyro_y'), gyro_z=L('gyro_z'),
+            lean_angle=L('lean_angle'), elapsed=elapsed, lap_elapsed=lap_elapsed,
             rpm=L('rpm'), exhaust_temp=L('exhaust_temp'),
         )
+
+
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return min(hi, max(lo, v))
+
+
+def estimate_lap_crossing_elapsed(prev_pt: DataPoint, curr_pt: DataPoint) -> float:
+    """Estimate start/finish crossing time between two consecutive points.
+
+    By default we treat the first sample in the new lap as the boundary; when
+    the first point carries a positive ``lap_elapsed`` we back-project it and
+    clamp to the segment.
+    """
+    lo = float(prev_pt.elapsed)
+    hi = float(curr_pt.elapsed)
+    if hi <= lo:
+        return lo
+    est = (lo + hi) * 0.5
+    if float(curr_pt.lap_elapsed) > 0.0:
+        est = float(curr_pt.elapsed) - float(curr_pt.lap_elapsed)
+    return _clamp(est, lo, hi)
+
+
+def build_laps_from_points(
+    all_points: List[DataPoint],
+    *,
+    outlap_lap_num: Optional[int] = 0,
+) -> List[Lap]:
+    """Rebuild laps with interpolated lap boundaries and consistent lap_elapsed."""
+    if not all_points:
+        return []
+
+    buckets: Dict[int, List[DataPoint]] = {}
+    first_idx_by_lap: Dict[int, int] = {}
+    order: List[int] = []
+    for idx, pt in enumerate(all_points):
+        if pt.lap not in buckets:
+            buckets[pt.lap] = []
+            first_idx_by_lap[pt.lap] = idx
+            order.append(pt.lap)
+        buckets[pt.lap].append(pt)
+
+    starts: Dict[int, float] = {}
+    first_lap = order[0]
+    starts[first_lap] = float(buckets[first_lap][0].elapsed)
+
+    for i in range(1, len(order)):
+        lap_num = order[i]
+        first_pt = buckets[lap_num][0]
+        prev_idx = max(0, first_idx_by_lap[lap_num] - 1)
+        prev_pt = all_points[prev_idx]
+        starts[lap_num] = estimate_lap_crossing_elapsed(prev_pt, first_pt)
+
+    laps: List[Lap] = []
+    for i, lap_num in enumerate(order):
+        pts = buckets[lap_num]
+        start = starts[lap_num]
+        lap_elapsed_origin = float(pts[0].elapsed)
+        for pt in pts:
+            # Keep per-lap samples anchored at 0 on the first recorded point.
+            # Lap *duration* still uses interpolated crossing boundaries.
+            pt.lap_elapsed = max(0.0, float(pt.elapsed) - lap_elapsed_origin)
+        if i + 1 < len(order):
+            end = starts[order[i + 1]]
+            dur = max(0.0, end - start)
+        else:
+            dur = max(0.0, float(pts[-1].elapsed) - start)
+        laps.append(Lap(
+            lap_num=lap_num,
+            points=pts,
+            duration=dur,
+            is_outlap=(outlap_lap_num is not None and lap_num == outlap_lap_num),
+        ))
+    return laps

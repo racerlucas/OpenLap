@@ -152,11 +152,15 @@ const GaugeMultiline = {
 
       // Format value
       let valStr;
-      const absV = Math.abs(value);
-      if (absV >= 1000)     valStr = value.toFixed(0);
-      else if (absV >= 100) valStr = value.toFixed(0);
-      else if (absV >= 10)  valStr = value.toFixed(1);
-      else                  valStr = value.toFixed(2);
+      if ((entry.channel || '') === 'lap_time') {
+        valStr = GaugeBase.fmtValue(value, 'lap_time');
+      } else {
+        const absV = Math.abs(value);
+        if (absV >= 1000)     valStr = value.toFixed(0);
+        else if (absV >= 100) valStr = value.toFixed(0);
+        else if (absV >= 10)  valStr = value.toFixed(1);
+        else                  valStr = value.toFixed(2);
+      }
       if (unit) valStr += '\u202f' + unit;
 
       // Combined label + value

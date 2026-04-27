@@ -121,7 +121,7 @@ def render(data: dict, w: int, h: int):
 
     if channel == 'lap_time':
         m_v = int(value // 60); s_v = value % 60
-        val_str = f"{m_v}:{s_v:05.2f}" if value >= 60 else f"{value:.2f}"
+        val_str = f"{m_v}:{s_v:06.3f}" if value >= 60 else f"{value:.3f}"
     elif abs(value) >= 10000:
         val_str = f"{value:,.0f}"
     elif abs(value) >= 100:

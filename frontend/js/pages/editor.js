@@ -135,21 +135,9 @@
   let _mountGen        = 0;     // incremented on unmount; guards stale async continuations
   let _resizeObserver  = null;
   let _trackMapGeometry = null; // {lats, lons} from OSM — loaded async on session change
-  let _gEmaAlpha = 0.10;        // backend-sourced telemetry smoothing alpha
   let _liveSpeedMax = 300;      // preview speed scale aligned with export rule
 
-  function _emaSmooth(vals, alpha = _gEmaAlpha) {
-    if (!vals?.length) return vals || [];
-    const a = Math.max(0.01, Math.min(1.0, Number(alpha) || 0.22));
-    const out = new Array(vals.length);
-    let s = Number(vals[0]) || 0;
-    for (let i = 0; i < vals.length; i++) {
-      const v = Number(vals[i]) || 0;
-      s = a * v + (1 - a) * s;
-      out[i] = s;
-    }
-    return out;
-  }
+  // Frontend stays display-only: semantic telemetry processing is backend-owned.
 
   // Constants (normalised)
   const MIN_NORM        = 0.04;
@@ -417,10 +405,8 @@
       };
     }
     if (channel === 'g_meter') {
-      const gxRaw = hist.map(pt => pt.gx ?? 0);
-      const gyRaw = hist.map(pt => pt.gy ?? 0);
-      const gxSm = _emaSmooth(gxRaw);
-      const gySm = _emaSmooth(gyRaw);
+      const gxSm = hist.map(pt => pt.gx_s ?? pt.gx ?? 0);
+      const gySm = hist.map(pt => pt.gy_s ?? pt.gy ?? 0);
       return {
         theme, channel,
         value:       gxSm[gxSm.length - 1] ?? 0,
@@ -451,11 +437,9 @@
       const multi_channels = keys.map((ch, ci) => {
         const m = _LIVE_FIELDS[ch] || { label: ch, unit: '', min: 0, max: 100, sym: false, key: ch };
         const rawVals = (ch === 'gforce_total')
-          ? hist.map(pt => pt.g_total ?? Math.hypot(pt.gx ?? 0, pt.gy ?? 0))
+          ? hist.map(pt => pt.g_total_s ?? pt.g_total ?? 0)
           : hist.map(pt => pt[m.key] ?? 0);
-        const vals = (ch === 'gforce_total' || ch === 'gforce_lon' || ch === 'gforce_lat' || ch === 'g_meter')
-          ? _emaSmooth(rawVals)
-          : rawVals;
+        const vals = rawVals;
         const refValsRaw = _refLapPoints?.length
           ? hist.map((_, j) => {
               const hi = Math.min(histStart + j, lapEnd);
@@ -464,9 +448,7 @@
               return v ?? 0;
             })
           : [];
-        const refVals = (ch === 'gforce_total' || ch === 'gforce_lon' || ch === 'gforce_lat' || ch === 'g_meter')
-          ? _emaSmooth(refValsRaw)
-          : refValsRaw;
+        const refVals = refValsRaw;
         return {
           channel: ch, label: m.label, unit: m.unit,
           values:    vals,
@@ -559,14 +541,10 @@
         })
       : [];
     const gValsRaw = (channel === 'gforce_total')
-      ? hist.map(pt => pt.g_total ?? Math.hypot(pt.gx ?? 0, pt.gy ?? 0))
+      ? hist.map(pt => pt.g_total_s ?? pt.g_total ?? 0)
       : hist.map(pt => pt[m.key] ?? 0);
-    const gVals = (channel === 'gforce_total' || channel === 'gforce_lon' || channel === 'gforce_lat' || channel === 'g_meter')
-      ? _emaSmooth(gValsRaw)
-      : gValsRaw;
-    const refVals = (channel === 'gforce_total' || channel === 'gforce_lon' || channel === 'gforce_lat' || channel === 'g_meter')
-      ? _emaSmooth(refHist)
-      : refHist;
+    const gVals = gValsRaw;
+    const refVals = refHist;
     return {
       theme, channel,
       value:            gVals[gVals.length - 1] ?? 0,
@@ -695,8 +673,8 @@
       ...p,
       gx_s: p?.gx_s ?? (p?.gx ?? 0),
       gy_s: p?.gy_s ?? (p?.gy ?? 0),
-      g_total: p?.g_total ?? Math.hypot(p?.gx ?? 0, p?.gy ?? 0),
-      g_total_s: p?.g_total_s ?? p?.g_total ?? Math.hypot(p?.gx ?? 0, p?.gy ?? 0),
+      g_total: p?.g_total ?? 0,
+      g_total_s: p?.g_total_s ?? p?.g_total ?? 0,
     }));
     _refCumDist = _buildCumDist(_refLapPoints);
     _refKey = key;
@@ -777,12 +755,8 @@
       }
       const i1 = Math.max(1, lo), i0 = i1 - 1;
       const d0 = _refCumDist[i0] ?? 0, d1 = _refCumDist[i1] ?? d0;
-      const v0 = (key === 'g_total')
-        ? Math.hypot(_refLapPoints[i0]?.gx ?? 0, _refLapPoints[i0]?.gy ?? 0)
-        : (_refLapPoints[i0]?.[key] ?? 0);
-      const v1 = (key === 'g_total')
-        ? Math.hypot(_refLapPoints[i1]?.gx ?? 0, _refLapPoints[i1]?.gy ?? 0)
-        : (_refLapPoints[i1]?.[key] ?? v0);
+      const v0 = (_refLapPoints[i0]?.[key] ?? 0);
+      const v1 = (_refLapPoints[i1]?.[key] ?? v0);
       const u = d1 > d0 ? (target - d0) / (d1 - d0) : 0;
       return v0 + (v1 - v0) * u;
     }
@@ -795,12 +769,8 @@
     }
     const i1 = Math.max(1, lo), i0 = i1 - 1;
     const t0 = _refLapPoints[i0]?.t ?? 0, t1 = _refLapPoints[i1]?.t ?? t0;
-    const v0 = (key === 'g_total')
-      ? Math.hypot(_refLapPoints[i0]?.gx ?? 0, _refLapPoints[i0]?.gy ?? 0)
-      : (_refLapPoints[i0]?.[key] ?? 0);
-    const v1 = (key === 'g_total')
-      ? Math.hypot(_refLapPoints[i1]?.gx ?? 0, _refLapPoints[i1]?.gy ?? 0)
-      : (_refLapPoints[i1]?.[key] ?? v0);
+    const v0 = (_refLapPoints[i0]?.[key] ?? 0);
+    const v1 = (_refLapPoints[i1]?.[key] ?? v0);
     const u = t1 > t0 ? (t - t0) / (t1 - t0) : 0;
     return v0 + (v1 - v0) * u;
   }
@@ -1050,10 +1020,10 @@
         ...pt,
         gx_s: pt?.gx_s ?? (pt?.gx ?? 0),
         gy_s: pt?.gy_s ?? (pt?.gy ?? 0),
-        g_total: (pt?.g_total != null) ? pt.g_total : Math.hypot(pt?.gx ?? 0, pt?.gy ?? 0),
+        g_total: (pt?.g_total != null) ? pt.g_total : 0,
         g_total_s: (pt?.g_total_s != null)
           ? pt.g_total_s
-          : ((pt?.g_total != null) ? pt.g_total : Math.hypot(pt?.gx ?? 0, pt?.gy ?? 0)),
+          : ((pt?.g_total != null) ? pt.g_total : 0),
       }));
       _liveLats   = _livePoints.map(p => p.lat);
       _liveLons   = _livePoints.map(p => p.lon);
@@ -1162,10 +1132,9 @@
 
     // Fetch metadata and lap list in parallel — no track-map call here so these
     // are never blocked by a slow session-file reload on the Python side.
-    const [meta, laps, tuning, channelMeta, editorCatalog] = await Promise.all([
+    const [meta, laps, channelMeta, editorCatalog] = await Promise.all([
       API.getSessionMeta(session.csv_path).catch(() => ({})),
       API.getLaps(session.csv_path).catch(() => []),
-      API.getTelemetryTuning().catch(() => ({ g_ema_alpha: 0.10 })),
       API.getChannelMeta().catch(() => ({})),
       API.getEditorCatalog().catch(() => ({})),
     ]);
@@ -1173,9 +1142,6 @@
 
     _liveSessionMeta = meta;
     _liveLaps        = laps;
-    _gEmaAlpha       = Number.isFinite(Number(tuning?.g_ema_alpha))
-      ? Number(tuning.g_ema_alpha)
-      : 0.10;
     _applyChannelMeta(channelMeta);
     _applyEditorCatalog(editorCatalog);
     // Default to the lap requested, but skip the outlap — start on the first timed lap.

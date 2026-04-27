@@ -14,7 +14,7 @@ import io
 import logging
 from typing import List, Dict, Optional
 
-from data_model import DataPoint, Lap, Session
+from data_model import DataPoint, Lap, Session, build_laps_from_points
 from exceptions import MissingHeaderError, NoDataRowsError
 from utils import compute_lean_angle
 
@@ -65,23 +65,7 @@ def load_csv(path: str) -> Session:
     for pt in all_pts:
         pt.elapsed = (pt.time - t0).total_seconds()
 
-    from collections import defaultdict
-    buckets: Dict[int, List[DataPoint]] = defaultdict(list)
-    for pt in all_pts:
-        buckets[pt.lap].append(pt)
-
-    laps: List[Lap] = []
-    for lap_num in sorted(buckets.keys()):
-        pts = buckets[lap_num]
-        if not pts:
-            continue
-        lap_t0 = pts[0].time
-        for pt in pts:
-            pt.lap_elapsed = (pt.time - lap_t0).total_seconds()
-        dur  = (pts[-1].time - pts[0].time).total_seconds()
-        lap  = Lap(lap_num=lap_num, points=pts, duration=dur,
-                   is_outlap=(lap_num == 0))
-        laps.append(lap)
+    laps = build_laps_from_points(all_pts, outlap_lap_num=0)
 
     timed = [l for l in laps if l.lap_num > 0]
     if len(timed) >= 3:

@@ -122,6 +122,8 @@ class WebviewAPI:
         self._auto_sync_cancel = threading.Event()
         self._auto_sync_thread: Optional[threading.Thread] = None
         self._thread_lock      = threading.Lock()
+        self._decode_sessions: dict[str, object] = {}
+        self._decode_lock = threading.Lock()
 
     # ── Called by main.py once the window is ready ────────────────────────────
     def set_window(self, window: webview.Window) -> None:
@@ -154,6 +156,138 @@ class WebviewAPI:
             logger.exception('Failed to start video file server')
             self._video_port = 0
         return self._video_port
+
+    # ── Video decode helpers (Data tab sync panel) ───────────────────────────
+    def get_video_fps(self, video_path: str) -> dict:
+        """Return basic video timing info for sync UI."""
+        try:
+            import cv2
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                return {'ok': False, 'error': 'cannot open video'}
+            fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            cap.release()
+            return {
+                'ok': True,
+                'fps': fps,
+                'frame_count': frame_count,
+                'duration': (frame_count / fps) if fps > 0 else 0.0,
+            }
+        except Exception as e:
+            return {'ok': False, 'error': str(e)}
+
+    def _decode_frame_b64(self, cap, frame_idx: int) -> tuple[bool, str]:
+        import cv2
+        cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(frame_idx)))
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            return False, ''
+        ok_jpg, buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+        if not ok_jpg:
+            return False, ''
+        import base64
+        return True, base64.b64encode(buf.tobytes()).decode('ascii')
+
+    def decode_video_frame(self, video_path: str, frame_idx: int = None, time_sec: float = None) -> dict:
+        """Decode one frame directly (stateless helper)."""
+        try:
+            import cv2
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                return {'ok': False, 'error': 'cannot open video'}
+            fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            if frame_idx is None and time_sec is not None and fps > 0:
+                frame_idx = int(max(0.0, float(time_sec)) * fps)
+            idx = int(frame_idx or 0)
+            idx = max(0, min(max(0, frame_count - 1), idx))
+            ok, image_b64 = self._decode_frame_b64(cap, idx)
+            cap.release()
+            if not ok:
+                return {'ok': False, 'error': 'decode failed'}
+            return {'ok': True, 'fps': fps, 'frame_count': frame_count, 'frame_idx': idx, 'image_b64': image_b64}
+        except Exception as e:
+            return {'ok': False, 'error': str(e)}
+
+    def open_decode_session(self, video_path: str, cache_radius: int = 0) -> dict:
+        """Open persistent decode session for responsive frame stepping."""
+        try:
+            import cv2
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                return {'ok': False, 'error': 'cannot open video'}
+            fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            import uuid
+            sid = uuid.uuid4().hex
+            with self._decode_lock:
+                self._decode_sessions[sid] = {
+                    'cap': cap,
+                    'fps': fps,
+                    'frame_count': frame_count,
+                    'video_path': video_path,
+                    'cache_radius': int(cache_radius or 0),
+                    'last_frame': 0,
+                }
+            return {'ok': True, 'session_id': sid, 'fps': fps, 'frame_count': frame_count}
+        except Exception as e:
+            return {'ok': False, 'error': str(e)}
+
+    def close_decode_session(self, session_id: str) -> dict:
+        with self._decode_lock:
+            sess = self._decode_sessions.pop(str(session_id or ''), None)
+        if not sess:
+            return {'ok': True}
+        try:
+            cap = sess.get('cap')
+            if cap is not None:
+                cap.release()
+        except Exception:
+            pass
+        return {'ok': True}
+
+    def decode_session_seek(self, session_id: str, frame_idx: int = None, time_sec: float = None) -> dict:
+        with self._decode_lock:
+            sess = self._decode_sessions.get(str(session_id or ''))
+        if not sess:
+            return {'ok': False, 'error': 'decode session not found'}
+        try:
+            cap = sess['cap']
+            fps = float(sess.get('fps') or 0.0)
+            frame_count = int(sess.get('frame_count') or 0)
+            if frame_idx is None and time_sec is not None and fps > 0:
+                frame_idx = int(max(0.0, float(time_sec)) * fps)
+            idx = int(frame_idx or 0)
+            idx = max(0, min(max(0, frame_count - 1), idx))
+            ok, image_b64 = self._decode_frame_b64(cap, idx)
+            if not ok:
+                return {'ok': False, 'error': 'decode failed'}
+            sess['last_frame'] = idx
+            return {'ok': True, 'fps': fps, 'frame_count': frame_count, 'frame_idx': idx, 'image_b64': image_b64}
+        except Exception as e:
+            return {'ok': False, 'error': str(e)}
+
+    def decode_session_step(self, session_id: str, direction: int = 1) -> dict:
+        with self._decode_lock:
+            sess = self._decode_sessions.get(str(session_id or ''))
+        if not sess:
+            return {'ok': False, 'error': 'decode session not found'}
+        cur = int(sess.get('last_frame') or 0)
+        step = 1 if int(direction or 1) >= 0 else -1
+        return self.decode_session_seek(session_id, frame_idx=cur + step, time_sec=None)
+
+    def step_video_frame(self, video_path: str, current_time: float, direction: int) -> dict:
+        """Stateless step helper used by older UI paths."""
+        info = self.get_video_fps(video_path)
+        if not info.get('ok'):
+            return info
+        fps = float(info.get('fps') or 0.0)
+        if fps <= 0:
+            return {'ok': False, 'error': 'invalid fps'}
+        cur_idx = int(max(0.0, float(current_time or 0.0)) * fps)
+        step = 1 if int(direction or 1) >= 0 else -1
+        return self.decode_video_frame(video_path, frame_idx=cur_idx + step, time_sec=None)
 
     # ── Config ────────────────────────────────────────────────────────────────
     def get_config(self) -> dict:
@@ -265,10 +399,28 @@ class WebviewAPI:
         offset_sources = self._config.offset_sources
         auto_failed    = set(self._config.auto_sync_failed)
 
+        def _lookup_sync(csv_path: str):
+            abs_csv = str(Path(csv_path).resolve())
+            candidates = [csv_path, abs_csv]
+            # Backward-compat: Windows path separator variants
+            if '\\' in csv_path:
+                candidates.append(csv_path.replace('\\', '/'))
+            if '/' in csv_path:
+                candidates.append(csv_path.replace('/', '\\'))
+            if '\\' in abs_csv:
+                candidates.append(abs_csv.replace('\\', '/'))
+            if '/' in abs_csv:
+                candidates.append(abs_csv.replace('/', '\\'))
+            for k in candidates:
+                if k in offsets:
+                    return offsets.get(k), offset_sources.get(k)
+            return None, None
+
         result = []
         for m in matches:
             csv = m.csv_path
             abs_csv = str(Path(csv).resolve())
+            sync_offset, sync_source = _lookup_sync(csv)
             si = self._config.session_info.get(abs_csv, {}) if isinstance(self._config.session_info, dict) else {}
             video_override = si.get('_video_override')
             if video_override and os.path.isfile(video_override):
@@ -277,6 +429,23 @@ class WebviewAPI:
             else:
                 video_paths = m.video_group.paths if m.video_group else []
                 matched = m.matched
+            track = ''
+            laps_str = ''
+            best_str = None
+            try:
+                sess = self._load_session(csv)
+                if sess:
+                    laps = list(getattr(sess, 'laps', []) or [])
+                    timed = [l for l in laps if not getattr(l, 'is_outlap', False) and not getattr(l, 'is_inlap', False)]
+                    durs = [float(l.duration) for l in timed if getattr(l, 'duration', None) is not None]
+                    if not durs:
+                        durs = [float(l.duration) for l in laps if getattr(l, 'duration', None) is not None]
+                    best = min(durs) if durs else None
+                    track = (getattr(sess, 'track', '') or '').strip()
+                    laps_str = str(len(laps)) if laps else '1'
+                    best_str = f'{best:.3f}s' if best is not None else None
+            except Exception:
+                logger.debug('scan_sessions: quick meta failed for %s', csv, exc_info=True)
             result.append({
                 'csv_path':         csv,
                 'source':           m.source,
@@ -285,12 +454,12 @@ class WebviewAPI:
                 'needs_conversion': m.needs_conversion,
                 'xrk_path':        m.xrk_path,
                 'video_paths':     video_paths,
-                'sync_offset':     offsets.get(csv),
-                'sync_source':     offset_sources.get(csv),
+                'sync_offset':     sync_offset,
+                'sync_source':     sync_source,
                 'auto_sync_failed': csv in auto_failed,
-                'track':           '',
-                'laps':            '',
-                'best':            None,
+                'track':           track,
+                'laps':            laps_str,
+                'best':            best_str,
             })
 
         logger.info('scan_sessions: %s → %d sessions', folder, len(result))
@@ -321,10 +490,28 @@ class WebviewAPI:
         offsets        = self._config.offsets
         offset_sources = self._config.offset_sources
         auto_failed    = set(self._config.auto_sync_failed)
+
+        def _lookup_sync(csv_path: str):
+            abs_csv = str(Path(csv_path).resolve()) if csv_path else ''
+            candidates = [csv_path, abs_csv]
+            if '\\' in csv_path:
+                candidates.append(csv_path.replace('\\', '/'))
+            if '/' in csv_path:
+                candidates.append(csv_path.replace('/', '\\'))
+            if '\\' in abs_csv:
+                candidates.append(abs_csv.replace('\\', '/'))
+            if '/' in abs_csv:
+                candidates.append(abs_csv.replace('/', '\\'))
+            for k in candidates:
+                if k in offsets:
+                    return offsets.get(k), offset_sources.get(k)
+            return None, None
+
         result = []
         for s in sessions:
             csv = s.get('csv_path', '')
             abs_csv = str(Path(csv).resolve()) if csv else ''
+            sync_offset, sync_source = _lookup_sync(csv)
             si = self._config.session_info.get(abs_csv, {}) if isinstance(self._config.session_info, dict) else {}
             video_override = si.get('_video_override')
             cached_paths = s.get('video_paths', [])
@@ -342,8 +529,8 @@ class WebviewAPI:
                 'needs_conversion': s.get('needs_conversion', False),
                 'xrk_path':        s.get('xrk_path'),
                 'video_paths':     video_paths,
-                'sync_offset':     offsets.get(csv),
-                'sync_source':     offset_sources.get(csv),
+                'sync_offset':     sync_offset,
+                'sync_source':     sync_source,
                 'auto_sync_failed': csv in auto_failed,
                 'track':           s.get('track', ''),
                 'laps':            s.get('laps', ''),
@@ -556,6 +743,26 @@ class WebviewAPI:
         self._config.save()
         return {'ok': True}
 
+    @staticmethod
+    def _sample_session_points(session, start_elapsed: float, end_elapsed: float, sample_hz: float = 60.0):
+        """Sample session telemetry via Session.interpolate_at on a fixed time grid."""
+        if not session or not getattr(session, 'all_points', None):
+            return []
+        t0 = float(start_elapsed)
+        t1 = max(t0, float(end_elapsed))
+        hz = max(1.0, float(sample_hz))
+        dt = 1.0 / hz
+        n_steps = max(0, int((t1 - t0) * hz))
+        sample_times = [t0 + i * dt for i in range(n_steps + 1)]
+        if not sample_times or sample_times[-1] < t1:
+            sample_times.append(t1)
+        out = []
+        for sess_abs in sample_times:
+            p = session.interpolate_at(sess_abs)
+            if p is not None:
+                out.append((float(sess_abs), p))
+        return out
+
     def load_lap_history(self, csv_path: str, lap_idx: int) -> list:
         """Return telemetry data points for one lap as a list of dicts."""
         try:
@@ -564,19 +771,24 @@ class WebviewAPI:
             if not session or lap_idx >= len(session.laps):
                 return []
             lap = session.laps[lap_idx]
+            if not lap.points:
+                return []
+            lap_start = float(lap.points[0].elapsed)
+            lap_end = lap_start + float(lap.duration or 0.0)
+            samples = self._sample_session_points(session, lap_start, lap_end, sample_hz=60.0)
             points = []
-            for p in lap.points:
+            for _, p in samples:
                 d = {
-                    't':            p.lap_elapsed,   # lap-relative elapsed (0 → lap_duration)
-                    'speed':        p.speed,         # km/h
-                    'gx':           p.gforce_x,      # longitudinal G
-                    'gy':           p.gforce_y,      # lateral G
-                    'rpm':          p.rpm or 0,
-                    'exhaust_temp': p.exhaust_temp or 0,
-                    'alt':          p.alt,
-                    'lat':          p.lat,
-                    'lon':          p.lon,
-                    'lean':         p.lean_angle,
+                    't':            float(p.lap_elapsed),    # lap-relative elapsed (0 → lap_duration)
+                    'speed':        float(p.speed),          # km/h
+                    'gx':           float(p.gforce_x),       # longitudinal G
+                    'gy':           float(p.gforce_y),       # lateral G
+                    'rpm':          float(p.rpm or 0),
+                    'exhaust_temp': float(p.exhaust_temp or 0),
+                    'alt':          float(p.alt),
+                    'lat':          float(p.lat),
+                    'lon':          float(p.lon),
+                    'lean':         float(p.lean_angle),
                 }
                 points.append(d)
             # Keep preview smoothing source-of-truth in Python so editor and
@@ -621,10 +833,10 @@ class WebviewAPI:
             lap_dur = float(lap.duration or 0.0)
             total_timed, best_by_lap, best_fallback = compute_best_so_far_state(session.laps)
             points = []
-            for p in session.all_points:
-                if float(p.elapsed) + 1e-9 < t0:
-                    continue
-                sess_rel = float(p.elapsed) - t0
+            end_elapsed = float(session.all_points[-1].elapsed) if session.all_points else t0
+            samples = self._sample_session_points(session, t0, end_elapsed, sample_hz=60.0)
+            for sess_abs, p in samples:
+                sess_rel = float(sess_abs) - t0
                 d = {
                     't':            float(p.lap_elapsed),
                     't_display':    lap_time_display_value(
@@ -697,10 +909,10 @@ class WebviewAPI:
                 return []
 
             t0 = float(cur_lap.points[0].elapsed) if cur_lap.points else 0.0
+            end_elapsed = float(cur_sess.all_points[-1].elapsed) if cur_sess.all_points else t0
+            samples = self._sample_session_points(cur_sess, t0, end_elapsed, sample_hz=60.0)
             out = []
-            for p in cur_sess.all_points:
-                if float(p.elapsed) + 1e-9 < t0:
-                    continue
+            for _, p in samples:
                 lap_elapsed = float(p.lap_elapsed)
                 try:
                     cur_dist = float(np.interp(lap_elapsed, cur_t, cur_d))
@@ -1732,7 +1944,8 @@ class WebviewAPI:
         suffix = os.path.splitext(csv_path)[1].lower()
 
         # Default for GPX/VBO: first lap outlap, last lap inlap.
-        if suffix in ('.gpx', '.vbo') and len(session.laps) >= 2:
+        # Keep at least one timed lap (2-lap files would otherwise become all filtered).
+        if suffix in ('.gpx', '.vbo') and len(session.laps) >= 3:
             for lap in session.laps:
                 lap.is_outlap = False
                 lap.is_inlap = False

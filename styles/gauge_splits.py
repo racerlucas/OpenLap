@@ -115,23 +115,23 @@ def render(data: dict, w: int, h: int):
                 ha='center', va='center', color=text_col,
                 fontsize=fs_row, fontfamily='sans-serif')
 
-        ref_str = f'{ref_t:.2f}' if ref_t is not None else '\u2014'
+        ref_str = f'{ref_t:.3f}' if ref_t is not None else '\u2014'
         ax.text(0.38, row_y, ref_str,
                 ha='center', va='center', color='#888888',
                 fontsize=fs_row, fontfamily='sans-serif')
 
         if cur_t is not None:
-            ax.text(0.62, row_y, f'{cur_t:.2f}',
+            ax.text(0.62, row_y, f'{cur_t:.3f}',
                     ha='center', va='center', color=text_col,
                     fontsize=fs_row, fontfamily='sans-serif')
             if delta is not None:
-                if abs(delta) < 0.01:
+                if abs(delta) < 0.001:
                     d_col = '#e8e8e8'
                 elif delta < 0:
                     d_col = '#22dd66'
                 else:
                     d_col = '#ff4444'
-                ax.text(0.87, row_y, f'{delta:+.2f}',
+                ax.text(0.87, row_y, f'{delta:+.3f}',
                         ha='center', va='center', color=d_col,
                         fontsize=fs_row, fontweight='bold', fontfamily='sans-serif')
         else:

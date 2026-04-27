@@ -128,7 +128,7 @@ def render(data: dict, w: int, h: int):
         # Delta (centre)
         sign = '+' if delta >= 0 else ''
         ax.text(cursor + box_w / 2, (BOX_Y1 + BOX_Y2) / 2,
-                f'{sign}{delta:.2f}',
+                f'{sign}{delta:.3f}',
                 ha='center', va='center',
                 color='white', fontweight='bold',
                 fontsize=fs, fontfamily='sans-serif')

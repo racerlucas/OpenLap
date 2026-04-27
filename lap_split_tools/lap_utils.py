@@ -93,7 +93,7 @@ def calculate_intersection(p1, p2, s1, s2):
     ua = ((x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3)) / denom
     ub = ((x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3)) / denom
     
-    if 0 <= ub <= 1:
+    if 0 <= ua <= 1 and 0 <= ub <= 1:
         x = x1 + ua * (x2 - x1)
         y = y1 + ua * (y2 - y1)
         
@@ -105,7 +105,7 @@ def calculate_intersection(p1, p2, s1, s2):
             t = t1 + ua * (t2 - t1)
             it_time = datetime.fromtimestamp(t, tz=timezone.utc)
             
-        return {'lat': y, 'lon': x, 'time': it_time}
+        return {'lat': y, 'lon': x, 'time': it_time, 'ratio': ua}
     return None
 
 # --- GPX Implementation ---
@@ -137,14 +137,27 @@ def load_gpx(path):
                     except:
                         pass
                 
-                # Extract speed from extensions if present
+                # Extract speed / lap metadata from extensions if present
                 speed = 0.0
+                lap = 1
+                lap_elapsed_s = None
                 ext = pt.find(f'{ns}extensions')
                 if ext is not None:
                     for child in ext.iter():
-                        if 'speed' in child.tag.lower():
+                        tag = child.tag.lower()
+                        if 'speed' in tag:
                             try:
                                 speed = float(child.text)
+                            except:
+                                pass
+                        elif tag.endswith('lap'):
+                            try:
+                                lap = int(float(child.text))
+                            except:
+                                pass
+                        elif 'lap_elapsed_s' in tag or 'lapelapsed' in tag:
+                            try:
+                                lap_elapsed_s = float(child.text)
                             except:
                                 pass
                 
@@ -153,7 +166,8 @@ def load_gpx(path):
                     'lon': lon,
                     'time': time,
                     'speed': speed,
-                    'lap': 1,
+                    'lap': lap,
+                    'lap_elapsed_s': lap_elapsed_s,
                     'xml_element': pt 
                 })
     return points, tree, ns
@@ -173,6 +187,12 @@ def save_gpx(path, tree, points, ns):
         if lap_el is None:
             lap_el = ET.SubElement(ext, lap_tag)
         lap_el.text = str(pt_data['lap'])
+        lap_elapsed_tag = f'{ns}lap_elapsed_s'
+        lap_elapsed_el = ext.find(lap_elapsed_tag)
+        if lap_elapsed_el is None:
+            lap_elapsed_el = ET.SubElement(ext, lap_elapsed_tag)
+        lap_elapsed = pt_data.get('lap_elapsed_s')
+        lap_elapsed_el.text = f"{float(lap_elapsed):.6f}" if lap_elapsed is not None else ''
         
     tree.write(path, encoding='utf-8', xml_declaration=True)
 
@@ -217,6 +237,8 @@ def load_vbo(path):
     time_idx = -1
     heading_idx = -1
     speed_idx = -1
+    lap_idx = -1
+    lap_elapsed_idx = -1
     
     for i, name in enumerate(column_names):
         name_lower = name.lower()
@@ -230,6 +252,10 @@ def load_vbo(path):
             heading_idx = i
         if ('velocity' in name_lower or 'speed' in name_lower): 
             speed_idx = i
+        if name_lower == 'lap':
+            lap_idx = i
+        if name_lower in ('lap_elapsed_s', 'lap_elapsed', 'lapelapsed'):
+            lap_elapsed_idx = i
 
     for row in data_rows:
         # VBO Lat/Long are often in minutes or decimal degrees. 
@@ -245,6 +271,8 @@ def load_vbo(path):
         lon = -parse_vbo_coord(row[lon_idx]) if lon_idx != -1 else 0.0
         heading = float(row[heading_idx]) if heading_idx != -1 else 0.0
         speed = float(row[speed_idx]) if speed_idx != -1 else 0.0
+        lap = int(float(row[lap_idx])) if lap_idx != -1 and lap_idx < len(row) else 1
+        lap_elapsed_s = float(row[lap_elapsed_idx]) if lap_elapsed_idx != -1 and lap_elapsed_idx < len(row) else None
         
         # VBO Time is HHMMSS.SS
         time_obj = None
@@ -264,23 +292,36 @@ def load_vbo(path):
             'time': time_obj,
             'heading': heading,
             'speed': speed,
-            'lap': 1,
+            'lap': lap,
+            'lap_elapsed_s': lap_elapsed_s,
             'raw_row': row
         })
         
     return points, column_names, header_lines
 
 def save_vbo(path, points, column_names, header_lines):
-    """Save VBO file with updated Lap channel."""
-    # Check if Lap is already in columns
+    """Save VBO file with updated lap metadata columns."""
+    # Check if lap columns already exist
     lap_idx = -1
+    lap_elapsed_idx = -1
     for i, name in enumerate(column_names):
         if name.lower() == 'lap':
             lap_idx = i
-            break
+        if name.lower() in ('lap_elapsed_s', 'lap_elapsed', 'lapelapsed'):
+            lap_elapsed_idx = i
     
-    # Update header lines if Lap is new
-    if lap_idx == -1:
+    # Update header lines if columns are new
+    if lap_idx == -1 or lap_elapsed_idx == -1:
+        append_cols = []
+        append_units = []
+        if lap_idx == -1:
+            append_cols.append('lap')
+            append_units.append('#')
+            lap_idx = len(column_names)
+        if lap_elapsed_idx == -1:
+            append_cols.append('lap_elapsed_s')
+            append_units.append('s')
+            lap_elapsed_idx = len(column_names) + (1 if 'lap' in append_cols and append_cols[0] != 'lap_elapsed_s' else 0)
         new_header = []
         in_col_names = False
         in_col_units = False
@@ -290,13 +331,13 @@ def save_vbo(path, points, column_names, header_lines):
                 in_col_names = True
                 new_header.append(line)
             elif in_col_names:
-                new_header.append(" ".join(column_names) + " lap\n")
+                new_header.append(" ".join(column_names + append_cols) + "\n")
                 in_col_names = False
             elif stripped == '[column units]':
                 in_col_units = True
                 new_header.append(line)
             elif in_col_units:
-                new_header.append(line.strip() + " #\n")
+                new_header.append(line.strip() + " " + " ".join(append_units) + "\n")
                 in_col_units = False
             else:
                 new_header.append(line)
@@ -311,14 +352,13 @@ def save_vbo(path, points, column_names, header_lines):
         
         if in_data:
             for pt in points:
-                row = pt['raw_row']
-                if lap_idx == -1:
-                    # Append new column
-                    f.write(" ".join(row) + f" {pt['lap']:03d}\n")
-                else:
-                    # Update existing column
-                    row[lap_idx] = f"{pt['lap']:03d}"
-                    f.write(" ".join(row) + "\n")
+                row = list(pt['raw_row'])
+                while len(row) <= max(lap_idx, lap_elapsed_idx):
+                    row.append('0')
+                row[lap_idx] = f"{int(pt.get('lap', 1)):03d}"
+                le = pt.get('lap_elapsed_s')
+                row[lap_elapsed_idx] = f"{float(le):.6f}" if le is not None else '0.000000'
+                f.write(" ".join(row) + "\n")
 
 # --- Splitting Logic ---
 
@@ -328,16 +368,32 @@ def split_into_laps(points, line_start, line_end, direction='CCW'):
         return points
     
     current_lap = 1
+    lap_start_time = points[0].get('time')
+    points[0]['lap'] = current_lap
+    points[0]['lap_elapsed_s'] = 0.0
     for i in range(1, len(points)):
         prev = points[i-1]
         curr = points[i]
         
         # Check crossing
-        if is_forward_crossing(prev, curr, line_start, line_end, direction):
+        inter = calculate_intersection(prev, curr, line_start, line_end)
+        crossed = False
+        if inter:
+            side_prev = get_side(prev['lat'], prev['lon'], line_start, line_end)
+            side_curr = get_side(curr['lat'], curr['lon'], line_start, line_end)
+            is_cw = isinstance(direction, str) and direction.upper() == 'CW'
+            crossed = (side_prev > 0 and side_curr < 0) if is_cw else (side_prev < 0 and side_curr > 0)
+        if crossed:
             current_lap += 1
+            if inter and inter.get('time') is not None:
+                lap_start_time = inter['time']
+            elif curr.get('time') is not None:
+                lap_start_time = curr.get('time')
             
         points[i]['lap'] = current_lap
+        if curr.get('time') is not None and lap_start_time is not None:
+            points[i]['lap_elapsed_s'] = max(0.0, (curr['time'] - lap_start_time).total_seconds())
+        else:
+            points[i]['lap_elapsed_s'] = 0.0
     
-    # First point inherits from second point or stays 1
-    points[0]['lap'] = points[1]['lap'] if len(points) > 1 else 1
     return points

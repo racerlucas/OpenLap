@@ -166,7 +166,11 @@ def render(data: dict, w: int, h: int):
             transform=ax_bg.transAxes, zorder=4))
 
         # Format value
-        if abs(value) >= 1000:
+        if entry.get('channel') == 'lap_time':
+            m_v = int(value // 60)
+            s_v = value % 60
+            val_str = f'{m_v}:{s_v:06.3f}' if value >= 60 else f'{value:.3f}'
+        elif abs(value) >= 1000:
             val_str = f'{value:,.0f}'
         elif abs(value) >= 100:
             val_str = f'{value:.0f}'
