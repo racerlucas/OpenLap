@@ -1,7 +1,9 @@
 # gauge_channels.py — Metadata for all renderable gauge channels
 # Imported by styles, overlay_worker, and the UI.
+from __future__ import annotations
 
 MULTI_CHANNEL = 'multi'   # pseudo-channel: combines multiple real channels
+G_EMA_ALPHA = 0.10
 
 # Selectable fields for the Info gauge (key → display label)
 INFO_FIELDS: dict[str, str] = {
@@ -19,6 +21,7 @@ GAUGE_CHANNELS = {
     'speed':        {'label': 'Speed',        'unit': 'km/h', 'hist_key': 'speed',        'min': 0,    'max': 250,   'symmetric': False},
     'rpm':          {'label': 'RPM',          'unit': 'rpm',  'hist_key': 'rpm',           'min': 0,    'max': 14000, 'symmetric': False},
     'exhaust_temp': {'label': 'Exhaust Temp', 'unit': '°C',   'hist_key': 'exhaust_temp',  'min': 0,    'max': 900,   'symmetric': False},
+    'gforce_total': {'label': 'Total G',      'unit': 'G',    'hist_key': 'g_total',       'min': 0,    'max': 3,     'symmetric': False},
     'gforce_lon':   {'label': 'Long G',       'unit': 'G',    'hist_key': 'gx',            'min': -3,   'max': 3,     'symmetric': True},
     'gforce_lat':   {'label': 'Lat G',        'unit': 'G',    'hist_key': 'gy',            'min': -3,   'max': 3,     'symmetric': True},
     'g_meter':      {'label': 'G-Meter',      'unit': 'G',    'hist_key': 'gx',            'min': -3,   'max': 3,     'symmetric': True},
@@ -40,7 +43,7 @@ GAUGE_COLOURS = [
 
 # Per-channel valid styles. Channels not listed use the default set.
 CHANNEL_STYLES = {
-    'delta_time': ['Delta', 'Numeric', 'Line', 'Compare'],
+    'delta_time': ['Delta', 'Delta Bar', 'Numeric', 'Line', 'Compare'],
     'lap_time':   ['Numeric', 'Splits', 'Sector Bar', 'Line', 'Compare', 'Bar'],
     'lean':       ['Lean', 'Bar', 'Dial', 'Line', 'Numeric', 'Compare'],
     'g_meter':    ['G-Meter'],
@@ -68,11 +71,28 @@ def get_channel_styles(channel: str, is_bike: bool = False) -> list:
     return list(_DEFAULT_GAUGE_STYLES)
 
 
+def _ema_smooth(vals: list[float], alpha: float = G_EMA_ALPHA) -> list[float]:
+    if not vals:
+        return vals
+    out = []
+    s = float(vals[0])
+    a = max(0.01, min(1.0, float(alpha)))
+    for v in vals:
+        s = a * float(v) + (1.0 - a) * s
+        out.append(s)
+    return out
+
+
 def gauge_data(channel: str, history: list) -> dict:
     """Build the data dict passed to a gauge render() function."""
     meta = GAUGE_CHANNELS.get(channel, GAUGE_CHANNELS['speed'])
     hk   = meta['hist_key']
-    vals = [p.get(hk, 0.0) for p in history] if history else [0.0]
+    if channel == 'gforce_total':
+        vals = [((p.get('gx', 0.0) ** 2 + p.get('gy', 0.0) ** 2) ** 0.5) for p in history] if history else [0.0]
+    else:
+        vals = [p.get(hk, 0.0) for p in history] if history else [0.0]
+    if channel in ('gforce_total', 'gforce_lat', 'gforce_lon', 'g_meter'):
+        vals = _ema_smooth(vals)
     raw_value = vals[-1] if vals else 0.0
     return {
         'value':            raw_value,
@@ -100,10 +120,20 @@ def build_multi_data(channels_list: list, history: list,
         if not meta:
             continue
         hk   = meta['hist_key']
-        vals = [p.get(hk, 0.0) for p in history] if history else [0.0]
+        if ch == 'gforce_total':
+            vals = [((p.get('gx', 0.0) ** 2 + p.get('gy', 0.0) ** 2) ** 0.5) for p in history] if history else [0.0]
+        else:
+            vals = [p.get(hk, 0.0) for p in history] if history else [0.0]
+        if ch in ('gforce_total', 'gforce_lat', 'gforce_lon', 'g_meter'):
+            vals = _ema_smooth(vals)
         ref_vals = []
         if ref_history:
-            ref_vals = [p.get(hk, 0.0) for p in ref_history]
+            if ch == 'gforce_total':
+                ref_vals = [((p.get('gx', 0.0) ** 2 + p.get('gy', 0.0) ** 2) ** 0.5) for p in ref_history]
+            else:
+                ref_vals = [p.get(hk, 0.0) for p in ref_history]
+            if ch in ('gforce_total', 'gforce_lat', 'gforce_lon', 'g_meter'):
+                ref_vals = _ema_smooth(ref_vals)
         entries.append({
             'channel':          ch,
             'label':            meta['label'],
@@ -195,7 +225,7 @@ def dummy_gauge_data(channel: str) -> dict:
                 'gy':    1.5 * math.sin(t * 1.8),
                 'gx':    0.8 * math.sin(t * 1.2),
             })
-        return build_multi_data(['speed', 'gforce_lat', 'gforce_lon'], fake_history)
+        return build_multi_data(['speed', 'gforce_total'], fake_history)
 
     # Info preview
     if channel == 'info':

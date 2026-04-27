@@ -65,6 +65,9 @@ def render(data: dict, w: int, h: int):
     fields = [_values[k] for k in selected if k in _values]
     if not fields:
         fields = [('INFO', '—')]
+    align = str(data.get('text_align', 'left')).lower()
+    if align not in ('left', 'center', 'right'):
+        align = 'left'
 
     dpi = 100
     fig = plt.figure(figsize=(w / dpi, h / dpi), dpi=dpi)
@@ -87,6 +90,7 @@ def render(data: dict, w: int, h: int):
 
     n        = len(fields)
     pad_l    = 0.08
+    x_text = 0.50 if align == 'center' else (0.92 if align == 'right' else pad_l)
     y_top    = 0.94
     y_bottom = 0.06
     row_h    = (y_top - y_bottom) / max(n, 1)
@@ -100,11 +104,11 @@ def render(data: dict, w: int, h: int):
         y_lbl = yc + row_h * 0.20
         y_val = yc - row_h * 0.14
 
-        ax.text(pad_l, y_lbl, lbl,
-                ha='left', va='center', color=label_col,
+        ax.text(x_text, y_lbl, lbl,
+                ha=align, va='center', color=label_col,
                 fontsize=fs_label, zorder=4)
-        ax.text(pad_l, y_val, val,
-                ha='left', va='center', color=text_col,
+        ax.text(x_text, y_val, val,
+                ha=align, va='center', color=text_col,
                 fontsize=fs_value, fontweight='bold', zorder=4)
 
     return fig_to_rgba(fig, (w, h))

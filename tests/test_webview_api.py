@@ -6,6 +6,7 @@ import os
 import sys
 import threading
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15,6 +16,8 @@ if 'webview' not in sys.modules:
     sys.modules['webview'] = MagicMock()
 
 from webview_api import WebviewAPI
+
+_FIXTURES = Path(__file__).resolve().parent / 'fixtures'
 
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
@@ -154,3 +157,16 @@ def test_cached_sessions_prefers_manual_video_override(api, tmp_path):
     assert out[0]["matched"] is True
     assert out[0]["video_paths"] == [str(Path(video_path).resolve())]
 
+
+def test_load_preview_history_covers_session_tail(api):
+    """Preview history extends from lap 0 start to session end; sess_rel is monotone."""
+    csv = _FIXTURES / 'racebox_car.csv'
+    if not csv.is_file():
+        pytest.skip('fixture racebox_car.csv missing')
+    lap_hist = api.load_lap_history(str(csv), 0)
+    prev = api.load_preview_history(str(csv), 0)
+    assert len(prev) >= len(lap_hist)
+    assert all('sess_rel' in p for p in prev)
+    srs = [float(p['sess_rel']) for p in prev]
+    assert srs == sorted(srs)
+    assert srs[-1] >= srs[0]

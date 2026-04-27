@@ -66,6 +66,9 @@ def render(data: dict, w: int, h: int):
     rows = [all_rows[k] for k in selected if k in all_rows]
     if not rows:
         rows = [("—", "—", label_col)]
+    align = str(data.get('text_align', 'split')).lower()
+    if align not in ('split', 'left', 'center', 'right'):
+        align = 'split'
 
     # ── Figure ────────────────────────────────────────────────────────────────
     dpi = 100
@@ -113,11 +116,21 @@ def render(data: dict, w: int, h: int):
         y_lbl = yc + row_h * 0.20
         y_val = yc - row_h * 0.12
 
-        ax.text(pad_l, y_lbl, lbl,
-                ha='left', va='center', color=label_col,
+        x_lbl = 0.50 if align == 'center' else (0.97 if align == 'right' else pad_l)
+        ha_lbl = 'center' if align == 'center' else ('right' if align == 'right' else 'left')
+        ax.text(x_lbl, y_lbl, lbl,
+                ha=ha_lbl, va='center', color=label_col,
                 fontsize=fs_label, fontfamily='sans-serif', zorder=4)
-        ax.text(0.97, y_val, val,
-                ha='right', va='center', color=col,
+        if align == 'split':
+            x_val, ha_val = 0.97, 'right'
+        elif align == 'center':
+            x_val, ha_val = 0.50, 'center'
+        elif align == 'right':
+            x_val, ha_val = 0.97, 'right'
+        else:
+            x_val, ha_val = pad_l, 'left'
+        ax.text(x_val, y_val, val,
+                ha=ha_val, va='center', color=col,
                 fontsize=fs_value, fontweight='bold',
                 fontfamily='monospace', zorder=4)
 

@@ -55,8 +55,11 @@ def render(data: dict, w: int, h: int):
         m  = int(value // 60)
         s  = value % 60
         txt = f"{m}:{s:06.3f}" if value >= 60 else f"{value:.3f}"
-        fs_value = max(8, min(int(20 * sc), int(w * 0.22)))
+        fs_label = max(5, min(int(10 * sc), int(w * 0.11)))
+        fs_value = max(11, min(int(28 * sc), int(w * 0.32)))
     elif channel == 'lean':
+        txt = f"{value:.1f}"
+    elif channel in ('gforce_total', 'gforce_lat', 'gforce_lon', 'g_meter'):
         txt = f"{value:.1f}"
     elif abs(value) >= 10000:
         txt = f"{value:,.0f}"
@@ -67,14 +70,26 @@ def render(data: dict, w: int, h: int):
     else:
         txt = f"{value:.2f}"
 
-    ax.text(0.50, 0.78, label.upper(),
-            ha='center', va='center', color=label_col,
-            fontsize=fs_label, fontfamily='sans-serif')
-    ax.text(0.50, 0.50, txt,
-            ha='center', va='center', color=text_col,
-            fontsize=fs_value, fontweight='bold', fontfamily='sans-serif')
-    ax.text(0.50, 0.24, unit,
-            ha='center', va='center', color=unit_col,
-            fontsize=fs_unit, fontfamily='sans-serif')
+    if channel == 'lap_time':
+        ax.text(0.50, 0.86, label.upper(),
+                ha='center', va='center', color=label_col,
+                fontsize=fs_label, fontfamily='sans-serif')
+        ax.text(0.50, 0.42, txt,
+                ha='center', va='center', color=text_col,
+                fontsize=fs_value, fontweight='bold', fontfamily='sans-serif')
+        if unit and str(unit).strip():
+            ax.text(0.50, 0.10, unit,
+                    ha='center', va='center', color=unit_col,
+                    fontsize=fs_unit, fontfamily='sans-serif')
+    else:
+        ax.text(0.50, 0.78, label.upper(),
+                ha='center', va='center', color=label_col,
+                fontsize=fs_label, fontfamily='sans-serif')
+        ax.text(0.50, 0.50, txt,
+                ha='center', va='center', color=text_col,
+                fontsize=fs_value, fontweight='bold', fontfamily='sans-serif')
+        ax.text(0.50, 0.24, unit,
+                ha='center', va='center', color=unit_col,
+                fontsize=fs_unit, fontfamily='sans-serif')
 
     return fig_to_rgba(fig, (w, h))

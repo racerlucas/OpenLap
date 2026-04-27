@@ -18,16 +18,12 @@ const GaugeScoreboard = {
     const elapsed   = data.lap_elapsed ?? 0;
     const best      = data.best_so_far;   // number or null/undefined
 
-    // Delta — use live reference-lap delta when available, else elapsed vs best
+    // Delta — show only live reference-lap delta when available.
     let deltaTxt, deltaCol;
     const liveDelta = data.delta_time;
     if (liveDelta != null) {
       deltaTxt = liveDelta >= 0 ? `+${Math.abs(liveDelta).toFixed(3)}` : `-${Math.abs(liveDelta).toFixed(3)}`;
       deltaCol = liveDelta < 0 ? theme.fillLo : theme.fillHi;
-    } else if (best != null && best > 0) {
-      const delta = elapsed - best;
-      deltaTxt = (delta >= 0 ? '+' : '') + Math.abs(delta).toFixed(3);
-      deltaCol = delta < 0 ? theme.fillLo : theme.fillHi;
     } else {
       deltaTxt = '—';
       deltaCol = theme.label;
@@ -46,6 +42,7 @@ const GaugeScoreboard = {
     const sel  = data.selected_fields || ['lap','best','current','delta'];
     const rows = sel.filter(k => allRows[k]).map(k => allRows[k]);
     if (rows.length === 0) rows.push(['—', '—', theme.label]);
+    const align = data.text_align || 'split'; // split | left | center | right
 
     const n       = rows.length;
     const yTop    = h * 0.94;
@@ -80,17 +77,19 @@ const GaugeScoreboard = {
       const yLbl = yc + rowH * 0.20;
       const yVal = yc - rowH * 0.12;
 
-      // Label (left-aligned)
-      ctx.textAlign = 'left';
+      // Label
+      const xLbl = align === 'center' ? (w * 0.5) : (align === 'right' ? (w * 0.97) : padL);
+      ctx.textAlign = align === 'center' ? 'center' : (align === 'right' ? 'right' : 'left');
       ctx.fillStyle = theme.label;
       ctx.font      = `${fsLabel}px 'Segoe UI', sans-serif`;
-      ctx.fillText(lbl, padL, yLbl);
+      ctx.fillText(lbl, xLbl, yLbl);
 
-      // Value (right-aligned, monospace)
-      ctx.textAlign  = 'right';
+      // Value
+      const xVal = align === 'split' ? (w * 0.97) : (align === 'center' ? (w * 0.5) : (align === 'right' ? (w * 0.97) : padL));
+      ctx.textAlign  = align === 'split' ? 'right' : (align === 'center' ? 'center' : (align === 'right' ? 'right' : 'left'));
       ctx.fillStyle  = col;
       ctx.font       = `bold ${fsValue}px 'Consolas', monospace`;
-      ctx.fillText(val, w * 0.97, yVal);
+      ctx.fillText(val, xVal, yVal);
     }
   }
 };

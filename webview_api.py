@@ -358,6 +358,17 @@ class WebviewAPI:
         Reads only the CSV header block — does not parse all data points.
         """
         try:
+            from telemetry_algorithms import build_effective_session_meta
+            session = self._load_session(csv_path)
+            if session:
+                from weather import fetch_weather
+                overrides = self._config.session_info.get(os.path.abspath(csv_path), {}) or {}
+                return build_effective_session_meta(
+                    session,
+                    info_overrides=overrides,
+                    weather_fetcher=fetch_weather,
+                )
+
             import os
             suffix = os.path.splitext(csv_path)[1].lower()
 
@@ -369,12 +380,39 @@ class WebviewAPI:
                 laps = getattr(session, 'laps', [])
                 durs = [l.duration for l in laps if l.duration and not l.is_outlap and not l.is_inlap]
                 best = min(durs) if durs else None
-                return {
+                out = {
                     'track':     getattr(session, 'track', '') or '',
                     'laps':      str(len(laps)),
                     'best':      f'{best:.3f}s' if best else '',
                     'best_secs': best,
+                    'info_track':   getattr(session, 'track', '') or '',
+                    'info_vehicle': getattr(session, 'vehicle', '') or '',
+                    'info_session': getattr(session, 'session_type', '') or '',
+                    'info_date': '',
+                    'info_time': '',
+                    'info_weather': '',
+                    'info_wind': '',
                 }
+                if getattr(session, 'date_utc', None):
+                    try:
+                        from datetime import datetime
+                        dt = datetime.fromisoformat(session.date_utc.replace('Z', '+00:00'))
+                        out['info_date'] = dt.strftime('%Y-%m-%d')
+                        out['info_time'] = dt.strftime('%H:%M')
+                    except Exception:
+                        pass
+                    try:
+                        first_gps = next(
+                            (p for p in session.all_points
+                             if getattr(p, 'lat', 0.0) and getattr(p, 'lon', 0.0)),
+                            None)
+                        if first_gps:
+                            from weather import fetch_weather
+                            out['info_weather'], out['info_wind'] = fetch_weather(
+                                first_gps.lat, first_gps.lon, session.date_utc)
+                    except Exception:
+                        pass
+                return out
 
             # AIM CSV: no metadata header; use filename
             if suffix == '.csv':
@@ -389,6 +427,13 @@ class WebviewAPI:
                             'laps': '',
                             'best': '',
                             'best_secs': None,
+                            'info_track': '',
+                            'info_vehicle': '',
+                            'info_session': '',
+                            'info_date': '',
+                            'info_time': '',
+                            'info_weather': '',
+                            'info_wind': '',
                         }
                     # RaceBox CSV — key:value header
                     from itertools import chain
@@ -406,12 +451,24 @@ class WebviewAPI:
                                 best_str = raw
                         elif line.startswith('Record,'):
                             break
-                return {'track': track, 'laps': laps_str,
-                        'best': best_str, 'best_secs': best_secs}
+                return {
+                    'track': track, 'laps': laps_str, 'best': best_str, 'best_secs': best_secs,
+                    'info_track': track or '',
+                    'info_vehicle': '',
+                    'info_session': '',
+                    'info_date': '',
+                    'info_time': '',
+                    'info_weather': '',
+                    'info_wind': '',
+                }
 
         except Exception:
             logger.exception('get_session_meta failed for %s', csv_path)
-        return {'track': '', 'laps': '', 'best': '', 'best_secs': None}
+        return {
+            'track': '', 'laps': '', 'best': '', 'best_secs': None,
+            'info_track': '', 'info_vehicle': '', 'info_session': '',
+            'info_date': '', 'info_time': '', 'info_weather': '', 'info_wind': '',
+        }
 
     # ── Lap loading ───────────────────────────────────────────────────────────
     def get_laps(self, csv_path: str) -> list:
@@ -440,6 +497,45 @@ class WebviewAPI:
             logger.exception('get_laps failed for %s', csv_path)
             return []
 
+    def resolve_preview_reference_lap(self, csv_path: str, lap_idx: int,
+                                      ref_mode: str,
+                                      ref_lap_csv_path: str = '',
+                                      ref_lap_num: int = 0) -> dict:
+        """Resolve preview reference lap in Python (same policy as export)."""
+        try:
+            from app_config import load_scan_cache
+            from reference_resolver import resolve_reference_lap
+            import os
+            sess = self._load_session(csv_path)
+            if not sess or lap_idx >= len(sess.laps):
+                return {'ok': False, 'ref_csv_path': '', 'ref_lap_num': 0, 'desc': 'invalid session/lap'}
+
+            cur_lap_num = getattr(sess.laps[lap_idx], 'lap_num', None)
+            ref_lap, desc = resolve_reference_lap(
+                ref_mode=ref_mode or 'none',
+                sess=sess,
+                session_info=self._config.session_info or {},
+                scan_cache=load_scan_cache(),
+                ref_lap_csv_path=ref_lap_csv_path or '',
+                ref_lap_num=int(ref_lap_num or 0),
+                current_lap_num=cur_lap_num,
+                load_session_fn=self._load_session,
+            )
+            if not ref_lap:
+                return {'ok': True, 'ref_csv_path': '', 'ref_lap_num': 0, 'desc': desc}
+            src_csv = getattr(ref_lap, '_source_csv_path', '') or ''
+            if not src_csv:
+                src_csv = ref_lap_csv_path if ref_mode == 'manual' else csv_path
+            return {
+                'ok': True,
+                'ref_csv_path': os.path.abspath(src_csv),
+                'ref_lap_num': int(getattr(ref_lap, 'lap_num', 0) or 0),
+                'desc': desc,
+            }
+        except Exception as e:
+            logger.exception('resolve_preview_reference_lap failed for %s lap %d: %s', csv_path, lap_idx, e)
+            return {'ok': False, 'ref_csv_path': '', 'ref_lap_num': 0, 'desc': str(e)}
+
     def set_lap_tag(self, csv_path: str, lap_num: int, tag: str, enabled: bool) -> dict:
         """Manually set/clear outlap or inlap tag for a lap number."""
         if tag not in ('outlap', 'inlap'):
@@ -463,6 +559,7 @@ class WebviewAPI:
     def load_lap_history(self, csv_path: str, lap_idx: int) -> list:
         """Return telemetry data points for one lap as a list of dicts."""
         try:
+            from gauge_channels import _ema_smooth
             session = self._load_session(csv_path)
             if not session or lap_idx >= len(session.laps):
                 return []
@@ -482,10 +579,184 @@ class WebviewAPI:
                     'lean':         p.lean_angle,
                 }
                 points.append(d)
+            # Keep preview smoothing source-of-truth in Python so editor and
+            # export use the same EMA method/parameters.
+            gx_s = _ema_smooth([p['gx'] for p in points]) if points else []
+            gy_s = _ema_smooth([p['gy'] for p in points]) if points else []
+            g_total_raw = [((p['gx'] ** 2 + p['gy'] ** 2) ** 0.5) for p in points] if points else []
+            g_total_s = _ema_smooth(g_total_raw) if points else []
+            for i, p in enumerate(points):
+                p['gx_s'] = gx_s[i] if i < len(gx_s) else p['gx']
+                p['gy_s'] = gy_s[i] if i < len(gy_s) else p['gy']
+                p['g_total'] = g_total_raw[i] if i < len(g_total_raw) else 0.0
+                p['g_total_s'] = g_total_s[i] if i < len(g_total_s) else p['g_total']
             return points
         except Exception as e:
             logger.exception('load_lap_history failed for %s lap %d: %s', csv_path, lap_idx, e)
             return []
+
+    def load_preview_history(self, csv_path: str, lap_idx: int) -> list:
+        """Telemetry from the start of *lap_idx* through the end of the session.
+
+        Used by the overlay editor preview so playback can continue past the
+        selected lap's finish line (same timeline as ``vid_t - sync_offset -
+        lap.elapsed_start``).
+
+        Each dict includes:
+
+        - ``t``: lap_elapsed for that sample's lap (same as :meth:`load_lap_history`).
+        - ``sess_rel``: ``point.elapsed - lap_start_elapsed`` (monotonic along the preview).
+        - ``lap``: lap number from the telemetry row.
+        """
+        try:
+            from gauge_channels import _ema_smooth
+            from telemetry_algorithms import compute_best_so_far_state, lap_time_display_value
+            session = self._load_session(csv_path)
+            if not session or lap_idx >= len(session.laps):
+                return []
+            lap = session.laps[lap_idx]
+            if not lap.points:
+                return []
+            t0 = float(lap.points[0].elapsed)
+            lap_dur = float(lap.duration or 0.0)
+            total_timed, best_by_lap, best_fallback = compute_best_so_far_state(session.laps)
+            points = []
+            for p in session.all_points:
+                if float(p.elapsed) + 1e-9 < t0:
+                    continue
+                sess_rel = float(p.elapsed) - t0
+                d = {
+                    't':            float(p.lap_elapsed),
+                    't_display':    lap_time_display_value(
+                        raw_lap_t=sess_rel,
+                        lap_dur=lap_dur,
+                        live_lap_elapsed=float(p.lap_elapsed),
+                    ),
+                    'sess_rel':     sess_rel,
+                    'lap':          int(p.lap),
+                    'speed':        float(p.speed),
+                    'gx':           float(p.gforce_x),
+                    'gy':           float(p.gforce_y),
+                    'rpm':          float(p.rpm or 0),
+                    'exhaust_temp': float(p.exhaust_temp or 0),
+                    'alt':          float(p.alt),
+                    'lat':          float(p.lat),
+                    'lon':          float(p.lon),
+                    'lean':         float(p.lean_angle),
+                    # Keep lap-scoreboard fields aligned with export pipeline.
+                    'li_lap_num':    int(p.lap),
+                    'li_total_laps': int(total_timed),
+                    'li_best_so_far': best_by_lap.get(int(p.lap), best_fallback),
+                }
+                points.append(d)
+            # Use the same smoothing implementation/alpha as export path.
+            gx_s = _ema_smooth([p['gx'] for p in points]) if points else []
+            gy_s = _ema_smooth([p['gy'] for p in points]) if points else []
+            g_total_raw = [((p['gx'] ** 2 + p['gy'] ** 2) ** 0.5) for p in points] if points else []
+            g_total_s = _ema_smooth(g_total_raw) if points else []
+            for i, p in enumerate(points):
+                p['gx_s'] = gx_s[i] if i < len(gx_s) else p['gx']
+                p['gy_s'] = gy_s[i] if i < len(gy_s) else p['gy']
+                p['g_total'] = g_total_raw[i] if i < len(g_total_raw) else 0.0
+                p['g_total_s'] = g_total_s[i] if i < len(g_total_s) else p['g_total']
+            return points
+        except Exception as e:
+            logger.exception('load_preview_history failed for %s lap %d: %s', csv_path, lap_idx, e)
+            return []
+
+    def compute_preview_delta(self, csv_path: str, lap_idx: int,
+                              ref_csv_path: str, ref_lap_num: int) -> list:
+        """Compute per-sample delta series for editor preview.
+
+        Uses the same delta core as export (delta_time.make_delta_fn +
+        distance-profile interpolation), and returns one value per sample in
+        ``load_preview_history(csv_path, lap_idx)`` order.
+        """
+        try:
+            import numpy as np
+            from delta_time import compute_lap_profile, make_delta_fn
+
+            if not ref_csv_path or not ref_lap_num:
+                return []
+
+            cur_sess = self._load_session(csv_path)
+            if not cur_sess or lap_idx >= len(cur_sess.laps):
+                return []
+            cur_lap = cur_sess.laps[lap_idx]
+
+            ref_sess = self._load_session(ref_csv_path)
+            if not ref_sess:
+                return []
+            ref_lap = next((l for l in ref_sess.laps if int(getattr(l, 'lap_num', 0)) == int(ref_lap_num)), None)
+            if ref_lap is None:
+                return []
+
+            delta_fn = make_delta_fn(ref_lap, current_lap_duration=cur_lap.duration)
+            cur_t, cur_d = compute_lap_profile(cur_lap)
+            if len(cur_t) < 2 or len(cur_d) < 2:
+                return []
+
+            t0 = float(cur_lap.points[0].elapsed) if cur_lap.points else 0.0
+            out = []
+            for p in cur_sess.all_points:
+                if float(p.elapsed) + 1e-9 < t0:
+                    continue
+                lap_elapsed = float(p.lap_elapsed)
+                try:
+                    cur_dist = float(np.interp(lap_elapsed, cur_t, cur_d))
+                    if not np.isfinite(cur_dist):
+                        cur_dist = 0.0
+                    dv = float(delta_fn(lap_elapsed, cur_dist))
+                    out.append(dv if np.isfinite(dv) else 0.0)
+                except Exception:
+                    out.append(0.0)
+            return out
+        except Exception as e:
+            logger.exception('compute_preview_delta failed for %s lap %d: %s', csv_path, lap_idx, e)
+            return []
+
+    def get_preview_map_tracks(self, csv_path: str, lap_idx: int,
+                               ref_csv_path: str = '', ref_lap_num: int = 0) -> dict:
+        """Return preprocessed map tracks for preview (shared with export logic)."""
+        try:
+            from telemetry_algorithms import (
+                MAP_MAX_POINTS,
+                MAP_REF_SMOOTH_WINDOW,
+                MAP_SMOOTH_WINDOW,
+                MAP_TIMED_SAMPLES,
+                build_complete_map_track,
+                build_map_track,
+            )
+            session = self._load_session(csv_path)
+            if not session or lap_idx >= len(session.laps):
+                return {'lap_lats': [], 'lap_lons': [], 'ref_lats': [], 'ref_lons': []}
+            lap_lats, lap_lons = build_complete_map_track(
+                session.laps,
+                max_points=MAP_MAX_POINTS,
+                smooth_window=MAP_SMOOTH_WINDOW,
+                timed_samples=MAP_TIMED_SAMPLES,
+            )
+            ref_lats, ref_lons = [], []
+            if ref_csv_path and ref_lap_num:
+                ref_sess = self._load_session(ref_csv_path)
+                if ref_sess:
+                    ref_lap = next(
+                        (l for l in ref_sess.laps if int(getattr(l, 'lap_num', 0)) == int(ref_lap_num)),
+                        None
+                    )
+                    if ref_lap:
+                        ref_lats, ref_lons = build_map_track(
+                            ref_lap.points,
+                            max_points=MAP_MAX_POINTS,
+                            smooth_window=MAP_REF_SMOOTH_WINDOW,
+                        )
+            return {
+                'lap_lats': lap_lats, 'lap_lons': lap_lons,
+                'ref_lats': ref_lats, 'ref_lons': ref_lons,
+            }
+        except Exception as e:
+            logger.exception('get_preview_map_tracks failed for %s lap %d: %s', csv_path, lap_idx, e)
+            return {'lap_lats': [], 'lap_lons': [], 'ref_lats': [], 'ref_lons': []}
 
     # ── File dialogs ──────────────────────────────────────────────────────────
     def open_folder_dialog(self) -> Optional[str]:
@@ -517,6 +788,76 @@ class WebviewAPI:
             return {'weather': weather_str, 'wind': wind_str}
         except Exception:
             return {'weather': '—', 'wind': '—'}
+
+    def get_telemetry_tuning(self) -> dict:
+        """Return backend telemetry algorithm tuning constants for UI parity."""
+        try:
+            from gauge_channels import G_EMA_ALPHA
+            return {'g_ema_alpha': float(G_EMA_ALPHA)}
+        except Exception:
+            return {'g_ema_alpha': 0.10}
+
+    def get_channel_meta(self) -> dict:
+        """Return channel metadata as a frontend-parity source-of-truth."""
+        try:
+            from gauge_channels import GAUGE_CHANNELS
+            return {k: dict(v) for k, v in (GAUGE_CHANNELS or {}).items()}
+        except Exception:
+            return {}
+
+    def get_editor_catalog(self) -> dict:
+        """Return editor catalog data (themes + per-channel styles)."""
+        try:
+            from gauge_channels import INFO_FIELDS_DEFAULT, get_channel_styles
+            from overlay_themes import DEFAULT_THEME, theme_names
+
+            channels = [
+                'speed', 'rpm', 'exhaust_temp', 'gforce_lon', 'gforce_lat',
+                'g_meter', 'lean', 'altitude', 'lap_time', 'delta_time',
+                'map', 'info', 'lap_info', 'multi', 'image',
+            ]
+            labels = {
+                'speed': '速度',
+                'rpm': 'RPM',
+                'exhaust_temp': '排气温度',
+                'gforce_lon': '纵向 G',
+                'gforce_lat': '横向 G',
+                'g_meter': 'G 仪表',
+                'lean': '倾角',
+                'altitude': '海拔',
+                'lap_time': '圈速',
+                'delta_time': '差值',
+                'map': '地图',
+                'info': '节信息',
+                'lap_info': '圈信息',
+                'multi': '多曲线',
+                'image': '图片 / Logo',
+            }
+            multi_channels = ['speed', 'rpm', 'exhaust_temp', 'gforce_lon', 'gforce_lat', 'lean', 'altitude', 'lap_time', 'delta_time']
+            channel_styles = {ch: list(get_channel_styles(ch)) for ch in channels}
+            return {
+                'theme_names': list(theme_names()),
+                'default_theme': str(DEFAULT_THEME),
+                'channel_styles': channel_styles,
+                'channel_labels': labels,
+                'multi_channels': multi_channels,
+                'channel_defaults': {
+                    'info': {'selected_fields': list(INFO_FIELDS_DEFAULT), 'info_overrides': {}, 'text_align': 'left'},
+                    'lap_info': {'selected_fields': ['lap', 'best', 'current', 'delta'], 'text_align': 'split'},
+                    'multi': {'multi_channels': ['speed', 'gforce_lat']},
+                    'image': {'image_path': '', 'opacity': 1.0, 'fit': 'contain'},
+                    'map': {'zoom_radius_m': 150, 'show_ref': True, 'map_rotate_deg': 0, 'map_mirror_x': False, 'map_mirror_y': False},
+                },
+            }
+        except Exception:
+            return {
+                'theme_names': ['Dark'],
+                'default_theme': 'Dark',
+                'channel_styles': {},
+                'channel_labels': {},
+                'multi_channels': [],
+                'channel_defaults': {},
+            }
 
     # ── Session info overrides ────────────────────────────────────────────────
     def edit_session_info(self, csv_path: str, overrides: dict) -> None:

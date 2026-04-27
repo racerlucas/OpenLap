@@ -60,14 +60,27 @@ def _parse_sections(path: str) -> Dict[str, List[str]]:
     return sections
 
 
-def _parse_date_from_comments(comments: str) -> Optional[datetime]:
-    """Extract the session date from the [comments] section text."""
-    # "File created on DD/MM/YYYY at HH:MM:SS by VBOX …"
-    m = re.search(r'(\d{2})/(\d{2})/(\d{4})', comments)
-    if m:
-        day, month, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        return datetime(year, month, day, tzinfo=timezone.utc)
-    return None
+def _parse_vbox_created_time(path: str, comments: str) -> Optional[datetime]:
+    """Extract absolute VBOX creation datetime from file preamble/comments."""
+    try:
+        with open(path, 'r', encoding='utf-8-sig', errors='ignore') as f:
+            head = f.read(4096)
+    except Exception:
+        head = ''
+    text = '\n'.join([head, comments])
+    # Supports both "File created on ..." and "File created in ..."
+    m = re.search(
+        r'file\s+created\s+(?:on|in)\s+(\d{2})/(\d{2})/(\d{4})(?:\s+at\s+(\d{2}):(\d{2}):(\d{2}))?',
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not m:
+        return None
+    day, month, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    hh = int(m.group(4) or 0)
+    mm = int(m.group(5) or 0)
+    ss = int(m.group(6) or 0)
+    return datetime(year, month, day, hh, mm, ss, tzinfo=timezone.utc)
 
 
 def _dms_to_decimal(raw: float, hemisphere: Optional[str]) -> float:
@@ -128,8 +141,8 @@ def load_vbo(path: str) -> Session:
     idx_lon     = _find('longitude east', 'longitude west', 'longitude', 'long', 'lon')
     idx_speed   = _find('velocity kmh', 'velocity mph', 'velocity', 'speed')
     idx_height  = _find('height', 'altitude')
-    idx_lat_g   = _find('lateral-acc', 'lateral acc', 'ay')
-    idx_lon_g   = _find('longitudinal-acc', 'longitudinal acc', 'ax')
+    idx_lat_g   = _find('lateral-acc', 'lateral acc', 'ay', 'latacc', 'lat_acc')
+    idx_lon_g   = _find('longitudinal-acc', 'longitudinal acc', 'ax', 'longacc', 'long_acc')
     idx_vert_g  = _find('az', 'vertical-acc', 'vertical acc')
     idx_lap     = _find('lap', 'lap trigger', 'lap-trigger', 'lapctr', 'lap beacon', 'lap count')
     idx_rpm     = _find('rpm')
@@ -170,7 +183,11 @@ def load_vbo(path: str) -> Session:
 
     # Session date from [comments]
     comments_text = '\n'.join(sections.get('comments', []))
-    session_date = _parse_date_from_comments(comments_text)
+    created_dt = _parse_vbox_created_time(path, comments_text)
+    session_date = None
+    if created_dt is not None:
+        # Point timestamps should use the VBO date + row HHMMSS time.
+        session_date = datetime(created_dt.year, created_dt.month, created_dt.day, tzinfo=timezone.utc)
 
     # ── Data rows ─────────────────────────────────────────────────────────────
 
@@ -276,7 +293,8 @@ def load_vbo(path: str) -> Session:
         laps[-1].is_inlap = True
 
     best_lap_time = min((l.duration for l in laps if not l.is_outlap and not l.is_inlap), default=0.0)
-    date_str = session_date.strftime('%Y-%m-%dT%H:%M:%SZ') if session_date else ''
+    # Prefer absolute creation datetime for session-level display metadata.
+    date_str = created_dt.strftime('%Y-%m-%dT%H:%M:%SZ') if created_dt else (session_date.strftime('%Y-%m-%dT%H:%M:%SZ') if session_date else '')
 
     return Session(
         source        = 'VBOX',

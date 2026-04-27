@@ -149,7 +149,7 @@
                  style="max-height:170px;overflow-y:auto;border:1px solid var(--border);
                         border-radius:3px;background:var(--bg)">
               <div style="padding:8px;font-size:10px;color:var(--text3)">
-                请选择会话后查看圈次。
+                请选择节后查看圈次。
               </div>
             </div>
             <input type="hidden" id="exp-range-start" value="1">
@@ -162,7 +162,7 @@
               <option value="lap_range">圈段范围（单视频）</option>
               <option value="fastest_lap">最快圈</option>
               <option value="all_laps">全部圈</option>
-              <option value="full">完整会话</option>
+              <option value="full" selected>完整节</option>
             </select>
           </div>
           <div class="form-row">
@@ -311,7 +311,7 @@
 
     // Show/hide scope-specific rows
     const _syncScopeRows = () => {
-      const scope = $('exp-scope')?.value || 'selected_lap';
+      const scope = $('exp-scope')?.value || 'full';
       _container.querySelectorAll('.exp-clip-row').forEach(r => {
         r.classList.toggle('hidden', scope !== 'clip');
       });
@@ -420,7 +420,7 @@
 
     const params = {
       items:            items,
-      scope:            $('exp-scope')?.value    || 'selected_lap',
+      scope:            $('exp-scope')?.value    || 'full',
       clip_start_s:     parseFloat($('exp-clip-start')?.value) || 0,
       clip_end_s:       parseFloat($('exp-clip-end')?.value)   || 0,
       padding:          parseFloat($('exp-padding').value)    || 5.0,

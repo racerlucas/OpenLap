@@ -62,7 +62,7 @@
     <!-- RaceBox cloud -->
     <section class="settings-section">
       <div class="section-title">RaceBox 云端</div>
-      <p class="section-hint">可直接从 racebox.pro 下载会话。首次使用会弹出登录窗口，授权信息会被保存。</p>
+      <p class="section-hint">可直接从 racebox.pro 下载节。首次使用会弹出登录窗口，授权信息会被保存。</p>
       <div id="rb-setup-wrap">
         <div id="rb-pw-status" class="form-row" style="font-size:10px;color:var(--text3)">检测中…</div>
         <div class="form-row" id="rb-install-row">
@@ -78,7 +78,7 @@
       <div id="rb-ready-wrap" class="hidden">
         <div class="form-row">
           <button class="btn btn-secondary" id="rb-login-btn">检查授权</button>
-          <button class="btn btn-accent btn-sm" id="rb-download-btn">⬇ 下载新会话</button>
+          <button class="btn btn-accent btn-sm" id="rb-download-btn">⬇ 下载新节</button>
           <button class="btn btn-secondary btn-sm hidden" id="rb-cancel-btn">取消</button>
           <span id="rb-login-msg" class="status-msg"></span>
         </div>

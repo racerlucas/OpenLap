@@ -120,6 +120,8 @@ def render(data: dict, w: int, h: int):
         fs_value = max(6, min(int(18 * sc), int(w * 0.14)))
     elif abs(value) >= 10000:
         val_str = f"{value:,.0f}"
+    elif channel in ('gforce_total', 'gforce_lat', 'gforce_lon', 'g_meter'):
+        val_str = f"{value:.1f}"
     elif abs(value) >= 100:
         val_str = f"{value:.0f}"
     elif abs(value) >= 10:

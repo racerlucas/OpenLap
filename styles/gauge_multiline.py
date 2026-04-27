@@ -137,7 +137,10 @@ def render(data: dict, w: int, h: int):
                 mec='white', mew=max(0.5, 0.6 * sc))
 
     # Legend (right side) — one combined line per entry to avoid any overlap
-    fs_leg = max(5, min(int(8 * sc), int(h * 0.09)))
+    _g_ch = frozenset({'gforce_total', 'gforce_lat', 'gforce_lon', 'g_meter'})
+    _g_only = bool(entries) and all((e.get('channel') or '') in _g_ch for e in entries)
+    fs_leg = (max(10, min(int(16 * sc), int(h * 0.17))) if _g_only
+              else max(5, min(int(8 * sc), int(h * 0.09))))
 
     legend_x  = 1.0 - legend_w + 0.01
     n_entries  = len(entries)

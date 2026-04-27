@@ -61,20 +61,40 @@ class VideoFile:
 
 def _ffprobe_creation_time(path: str) -> Optional[datetime]:
     """Extract creation_time from video metadata via ffprobe."""
+    def _parse_dt(raw: str) -> Optional[datetime]:
+        if not raw:
+            return None
+        txt = raw.strip()
+        # Common ffprobe forms:
+        # 2026-04-27T01:23:45.000000Z / 2026-04-27T01:23:45Z / 2026-04-27 01:23:45
+        txt = txt.replace('Z', '+00:00')
+        try:
+            dt = datetime.fromisoformat(txt)
+        except Exception:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+
     try:
         r = _run(['ffprobe', '-v', 'quiet', '-print_format', 'json',
-             '-show_entries', 'format_tags=creation_time:format=duration',
+             '-show_entries',
+             'format=duration:'
+             'format_tags=creation_time,com.apple.quicktime.creationdate:'
+             'stream_tags=creation_time,com.apple.quicktime.creationdate',
              path], text=True, timeout=10)
         data = json.loads(r.stdout)
-        ct = (data.get('format', {}).get('tags', {}).get('creation_time') or
-              data.get('format', {}).get('tags', {}).get('com.apple.quicktime.creationdate'))
+        fmt_tags = data.get('format', {}).get('tags', {}) or {}
+        stream_tags = (data.get('streams', [{}])[0].get('tags', {}) if data.get('streams') else {}) or {}
+        ct = (
+            fmt_tags.get('creation_time')
+            or fmt_tags.get('com.apple.quicktime.creationdate')
+            or stream_tags.get('creation_time')
+            or stream_tags.get('com.apple.quicktime.creationdate')
+        )
         dur = float(data.get('format', {}).get('duration', 0))
-        if ct:
-            # Normalise timezone
-            ct = ct.replace('Z', '+00:00')
-            dt = datetime.fromisoformat(ct)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
+        dt = _parse_dt(ct) if ct else None
+        if dt is not None:
             return dt, dur
         return None, dur
     except Exception:
@@ -98,11 +118,10 @@ def scan_videos(folder: str, progress_cb: Optional[Callable[[str], None]] = None
             progress_cb(f"Reading video metadata… ({i}/{total})  {os.path.basename(path)}")
         ct, dur = _ffprobe_creation_time(path)
         if ct is None:
-            mtime = os.path.getmtime(path)
-            ct    = datetime.fromtimestamp(mtime, tz=timezone.utc)
-            from datetime import timedelta
-            if dur > 0:
-                ct = ct - timedelta(seconds=dur)
+            # User requested metadata-based matching; skip files without valid
+            # creation_time metadata instead of falling back to filesystem time.
+            logger.warning('Video metadata missing creation_time, skipped: %s', path)
+            continue
         results.append(VideoFile(path=path, creation_time=ct, duration=dur))
     results.sort(key=lambda v: v.sort_key)
     return results
@@ -384,7 +403,7 @@ def match_sessions(csv_paths: List[str],
 def _read_csv_start_time(path: str) -> Optional[datetime]:
     """Read session start time from a data file.
 
-    VBOX:    reads date from [comments] and time from first [data] row.
+    VBOX:    reads absolute time from "File created on/in ..." in file content.
     GPX:     reads the first <time> element.
     RaceBox: reads the 'Date UTC,' metadata line.
     AIM:     reads the '# Session-Date:' comment or falls back to mtime.
@@ -393,37 +412,22 @@ def _read_csv_start_time(path: str) -> Optional[datetime]:
     if Path(path).suffix.lower() == '.vbo':
         try:
             import re as _re
-            sections: dict = {}
-            current = None
             with open(path, 'r', encoding='utf-8-sig', errors='ignore') as f:
-                for line in f:
-                    line = line.rstrip('\n\r')
-                    if line.startswith('[') and line.endswith(']'):
-                        current = line[1:-1].strip().lower()
-                        sections[current] = []
-                    elif current is not None and line.strip():
-                        sections[current].append(line)
-            comments = '\n'.join(sections.get('comments', []))
-            dm = _re.search(r'(\d{2})/(\d{2})/(\d{4})', comments)
-            session_date = (datetime(int(dm.group(3)), int(dm.group(2)), int(dm.group(1)),
-                                     tzinfo=timezone.utc) if dm else None)
-            channels = [c.strip().lower() for c in sections.get('header', [])]
-            idx_time = next((i for i, c in enumerate(channels) if c == 'time'), None)
-            data_lines = sections.get('data', [])
-            if session_date and idx_time is not None and data_lines:
-                cols = data_lines[0].split()
-                if idx_time < len(cols):
-                    raw = float(cols[idx_time])
-                    h = int(raw) // 10000
-                    m = (int(raw) // 100) % 100
-                    s = round(raw - h * 10000 - m * 100, 6)
-                    return session_date + timedelta(hours=h, minutes=m, seconds=s)
-            if session_date:
-                return session_date
+                head = f.read(4096)
+            m = _re.search(
+                r'file\s+created\s+(?:on|in)\s+(\d{2})/(\d{2})/(\d{4})(?:\s+at\s+(\d{2}):(\d{2}):(\d{2}))?',
+                head,
+                flags=_re.IGNORECASE,
+            )
+            if m:
+                day, month, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                hh = int(m.group(4) or 0)
+                mm = int(m.group(5) or 0)
+                ss = int(m.group(6) or 0)
+                return datetime(year, month, day, hh, mm, ss, tzinfo=timezone.utc)
         except Exception:
             logger.debug('Could not read VBOX start time from %s', path, exc_info=True)
-        mtime = os.path.getmtime(path)
-        return datetime.fromtimestamp(mtime, tz=timezone.utc)
+        return None
 
     if Path(path).suffix.lower() == '.ld':
         import struct as _s

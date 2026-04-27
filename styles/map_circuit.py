@@ -1,8 +1,7 @@
 """
 Map style: Circuit
 ==================
-Classic overhead circuit map with track outline, driven portion
-highlighted in white, current position dot, and start marker.
+Classic overhead circuit map with track outline, current position dot, and start marker.
 
 Optionally draws an OpenStreetMap circuit outline as a road-like background
 when `track_map_lats` / `track_map_lons` are present in data.
@@ -17,6 +16,7 @@ ELEMENT_TYPE = "map"
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import math
 
 
 def _chaikin(xs, ys, rounds=2):
@@ -46,7 +46,6 @@ def render(data: dict, w: int, h: int):
     map_bg          = T.get('map_bg_rgba',     (0, 0, 0, 0.65))
     track_outer     = T.get('map_track_outer', '#1a2a3a')
     track_inner     = T.get('map_track_inner', '#2255aa')
-    driven_col      = T.get('map_driven',      '#ffffff')
     dot_col         = T.get('map_dot',         '#ff2222')
     start_col       = T.get('map_start',       '#00ff88')
 
@@ -54,6 +53,42 @@ def render(data: dict, w: int, h: int):
     osm_lons  = list(data.get('track_map_lons')  or [])
     osm_areas = list(data.get('track_map_areas') or [])
     has_osm   = bool(osm_lats and osm_lons)
+    rotate_deg = float(data.get('map_rotate_deg', 0.0) or 0.0)
+    mirror_x   = bool(data.get('map_mirror_x', False))
+    mirror_y   = bool(data.get('map_mirror_y', False))
+
+    def _transform_xy(xs, ys):
+        if not xs or not ys:
+            return xs, ys
+        cx = (min(xs) + max(xs)) * 0.5
+        cy = (min(ys) + max(ys)) * 0.5
+        rad = math.radians(rotate_deg)
+        cr, sr = math.cos(rad), math.sin(rad)
+        ox, oy = [], []
+        for x, y in zip(xs, ys):
+            dx = x - cx
+            dy = y - cy
+            if mirror_x:
+                dx = -dx
+            if mirror_y:
+                dy = -dy
+            ox.append(cx + (dx * cr - dy * sr))
+            oy.append(cy + (dx * sr + dy * cr))
+        return ox, oy
+
+    lons, lats = _transform_xy(lons, lats)
+    if has_osm:
+        osm_lons, osm_lats = _transform_xy(osm_lons, osm_lats)
+    transformed_areas = []
+    for area in osm_areas:
+        a_lats = area.get('lats', [])
+        a_lons = area.get('lons', [])
+        if a_lats and a_lons:
+            tlons, tlats = _transform_xy(a_lons, a_lats)
+            transformed_areas.append({'lats': tlats, 'lons': tlons})
+        else:
+            transformed_areas.append(area)
+    osm_areas = transformed_areas
 
     dpi = 100
     fig, ax = plt.subplots(figsize=(w / dpi, h / dpi), dpi=dpi)
@@ -75,13 +110,11 @@ def render(data: dict, w: int, h: int):
         ax.plot(s_lons, s_lats, color='#2d3748', lw=5.5,
                 solid_capstyle='round', solid_joinstyle='round', zorder=0)
 
-    ax.plot(lons, lats, color=track_outer, lw=5.0, solid_capstyle='round', zorder=1)
-    ax.plot(lons, lats, color=track_inner, lw=2.5, solid_capstyle='round', zorder=2)
-
-    if cur_idx > 1:
-        n = min(cur_idx + 1, len(lats))
-        ax.plot(lons[:n], lats[:n], color=driven_col, lw=3.0,
-                alpha=0.92, solid_capstyle='round', zorder=3)
+    s_lons_gps, s_lats_gps = _chaikin(lons, lats)
+    ax.plot(s_lons_gps, s_lats_gps, color=track_outer, lw=5.0,
+            solid_capstyle='round', solid_joinstyle='round', zorder=1)
+    ax.plot(s_lons_gps, s_lats_gps, color=track_inner, lw=2.5,
+            solid_capstyle='round', solid_joinstyle='round', zorder=2)
 
     if 0 <= cur_idx < len(lats):
         ax.plot(lons[cur_idx], lats[cur_idx], 'o',

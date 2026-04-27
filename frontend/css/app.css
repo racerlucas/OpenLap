@@ -395,6 +395,42 @@ body {
   object-fit: contain;
   display: block;
   margin-bottom: 6px;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+.sync-video.ready {
+  opacity: 1;
+}
+.sync-frame-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 60px;
+  margin-bottom: 6px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #000;
+}
+.sync-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text2);
+  font-size: 11px;
+  background: linear-gradient(180deg, rgba(0,0,0,0.35), rgba(0,0,0,0.55));
+}
+.sync-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255,255,255,0.22);
+  border-top-color: var(--acc);
+  border-radius: 50%;
+  animation: sync-spin 0.8s linear infinite;
+}
+@keyframes sync-spin {
+  to { transform: rotate(360deg); }
 }
 .sync-controls {
   display: flex;

@@ -45,6 +45,27 @@ def _gps_to_local(lats, lons, center_lat, center_lon):
     return x, y
 
 
+def _transform_xy(xs, ys, rotate_deg=0.0, mirror_x=False, mirror_y=False,
+                  center_x=None, center_y=None):
+    if not xs or not ys:
+        return xs, ys
+    cx = float(center_x) if center_x is not None else (min(xs) + max(xs)) * 0.5
+    cy = float(center_y) if center_y is not None else (min(ys) + max(ys)) * 0.5
+    rad = math.radians(rotate_deg)
+    cr, sr = math.cos(rad), math.sin(rad)
+    ox, oy = [], []
+    for x, y in zip(xs, ys):
+        dx = x - cx
+        dy = y - cy
+        if mirror_x:
+            dx = -dx
+        if mirror_y:
+            dy = -dy
+        ox.append(cx + (dx * cr - dy * sr))
+        oy.append(cy + (dx * sr + dy * cr))
+    return ox, oy
+
+
 def render(data: dict, w: int, h: int):
     import numpy as np
     from overlay_utils import fig_to_rgba
@@ -53,7 +74,7 @@ def render(data: dict, w: int, h: int):
     lons        = data.get('lons', [])
     cur_idx     = int(data.get('cur_idx', 0))
     radius      = max(10.0, float(data.get('zoom_radius_m', 150)))
-    show_ref    = bool(data.get('show_ref', False))
+    show_ref    = bool(data.get('show_ref', True))
     ref_lats    = data.get('ref_lats', [])
     ref_lons    = data.get('ref_lons', [])
     ref_cur_idx = int(data.get('ref_cur_idx', 0))
@@ -62,7 +83,6 @@ def render(data: dict, w: int, h: int):
     map_bg       = T.get('map_bg_rgba',     (0, 0, 0, 0.65))
     track_outer  = T.get('map_track_outer', '#1a2a3a')
     track_inner  = T.get('map_track_inner', '#2255aa')
-    driven_col   = T.get('map_driven',      '#ffffff')
     dot_col      = T.get('map_dot',         '#ff2222')
     start_col    = T.get('map_start',       '#00ff88')
     ref_col      = '#cc44ff'
@@ -70,6 +90,9 @@ def render(data: dict, w: int, h: int):
     osm_lats  = list(data.get('track_map_lats')  or [])
     osm_lons  = list(data.get('track_map_lons')  or [])
     osm_areas = list(data.get('track_map_areas') or [])
+    rotate_deg = float(data.get('map_rotate_deg', 0.0) or 0.0)
+    mirror_x   = bool(data.get('map_mirror_x', False))
+    mirror_y   = bool(data.get('map_mirror_y', False))
 
     if not lats or len(lats) < 2:
         from styles.map_circuit import render as _circuit
@@ -80,6 +103,8 @@ def render(data: dict, w: int, h: int):
     center_lon  = lons[safe_idx]
 
     x, y        = _gps_to_local(lats, lons, center_lat, center_lon)
+    # Keep zoomed map locked on the current position (0,0), matching frontend.
+    x, y        = _transform_xy(x, y, rotate_deg, mirror_x, mirror_y, center_x=0.0, center_y=0.0)
 
     dpi = 100
     fig, ax = plt.subplots(figsize=(w / dpi, h / dpi), dpi=dpi)
@@ -92,11 +117,15 @@ def render(data: dict, w: int, h: int):
         a_lons = area.get('lons', [])
         if len(a_lats) >= 3:
             ox_a, oy_a = _gps_to_local(a_lats, a_lons, center_lat, center_lon)
+            ox_a, oy_a = _transform_xy(
+                ox_a, oy_a, rotate_deg, mirror_x, mirror_y, center_x=0.0, center_y=0.0
+            )
             ax.fill(ox_a, oy_a, color='#4a5568', alpha=0.55, zorder=0)
 
     # Draw OSM road background (below GPS trace) — smoothed
     if osm_lats and osm_lons:
         ox, oy = _gps_to_local(osm_lats, osm_lons, center_lat, center_lon)
+        ox, oy = _transform_xy(ox, oy, rotate_deg, mirror_x, mirror_y, center_x=0.0, center_y=0.0)
         sx, sy = _chaikin(ox, oy)
         ax.plot(sx, sy, color='#4a5568', lw=9.0,
                 solid_capstyle='round', solid_joinstyle='round', zorder=0)
@@ -104,24 +133,23 @@ def render(data: dict, w: int, h: int):
                 solid_capstyle='round', solid_joinstyle='round', zorder=0)
 
     # Full track outline
-    ax.plot(x, y, color=track_outer, lw=5.0, solid_capstyle='round', zorder=1)
-    ax.plot(x, y, color=track_inner, lw=2.5, solid_capstyle='round', zorder=2)
+    sx, sy = _chaikin(x, y)
+    ax.plot(sx, sy, color=track_outer, lw=5.0,
+            solid_capstyle='round', solid_joinstyle='round', zorder=1)
+    ax.plot(sx, sy, color=track_inner, lw=2.5,
+            solid_capstyle='round', solid_joinstyle='round', zorder=2)
 
     # Reference lap trace + reference dot
     if show_ref and ref_lats and len(ref_lats) >= 2:
         rx, ry = _gps_to_local(ref_lats, ref_lons, center_lat, center_lon)
-        ax.plot(rx, ry, color=ref_col, lw=2.0, alpha=0.80,
-                solid_capstyle='round', zorder=3)
+        rx, ry = _transform_xy(rx, ry, rotate_deg, mirror_x, mirror_y, center_x=0.0, center_y=0.0)
+        rsx, rsy = _chaikin(rx, ry)
+        ax.plot(rsx, rsy, color=ref_col, lw=2.0, alpha=0.80,
+                solid_capstyle='round', solid_joinstyle='round', zorder=3)
         safe_ref_idx = max(0, min(ref_cur_idx, len(ref_lats) - 1))
         ax.plot(rx[safe_ref_idx], ry[safe_ref_idx], 'o',
                 color=ref_col, ms=max(5, min(w, h) // 32),
                 mec='white', mew=1.4, zorder=6)
-
-    # Driven portion
-    if safe_idx > 1:
-        n = min(safe_idx + 1, len(x))
-        ax.plot(x[:n], y[:n], color=driven_col, lw=3.0,
-                alpha=0.92, solid_capstyle='round', zorder=4)
 
     # Start marker
     ax.plot(x[0], y[0], 's', color=start_col,

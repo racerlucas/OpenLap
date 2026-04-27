@@ -26,6 +26,8 @@
   let _metaBusy    = false;
   let _videoPort   = 0;    // localhost port of the Python video file server
   let _unlistenFns = [];   // push-event unlisten callbacks
+  let _syncDecoderSessionId = '';
+  let _syncDecoderVideoPath = '';
 
   // Best per day: csv_path → true if this session has the day's best lap
   let _dayBest = {};
@@ -41,6 +43,8 @@
 
   function fmtDateTime(iso) {
     if (!iso) return '—';
+    const m = String(iso).match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/);
+    if (m) return `${m[1]} ${m[2]}:${m[3]}${m[4] ? ':' + m[4] : ''}`;
     try {
       return new Date(iso).toLocaleString(undefined,
         { year:'numeric', month:'2-digit', day:'2-digit',
@@ -50,6 +54,8 @@
 
   function dateKey(iso) {
     if (!iso) return 'Unknown';
+    const m = String(iso).match(/^(\d{4}-\d{2}-\d{2})[T ]/);
+    if (m) return m[1];
     try { return new Date(iso).toISOString().slice(0, 10); }
     catch { return 'Unknown'; }
   }
@@ -131,8 +137,9 @@
     const m       = _meta[s.csv_path] || {};
     const isSel   = s.csv_path === _selCsv;
     const isDayB  = _dayBest[s.csv_path];
-    const time    = s.csv_start ? new Date(s.csv_start)
-                      .toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}) : '—';
+    const timeMatch = s.csv_start ? String(s.csv_start).match(/^[0-9-]+[T ](\d{2}):(\d{2})/) : null;
+    const time = timeMatch ? `${timeMatch[1]}:${timeMatch[2]}`
+      : (s.csv_start ? new Date(s.csv_start).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}) : '—');
     const trackOverride = _config?.session_info?.[s.csv_path]?.info_track;
     const track   = trackOverride || m.track || baseName(s.csv_path);
     const lapStr  = m.laps  || '—';
@@ -190,7 +197,7 @@
 
     const s = _sessions.find(x => x.csv_path === _selCsv);
     if (!s) {
-      pane.innerHTML = `<div class="dr-empty">请选择一个会话查看详情并校准视频。</div>`;
+      pane.innerHTML = `<div class="dr-empty">请选择一节查看详情并校准视频。</div>`;
       return;
     }
 
@@ -206,7 +213,7 @@
     pane.innerHTML = `
 <!-- Info card -->
 <div class="dr-card">
-  <div class="dr-card-title">会话信息</div>
+  <div class="dr-card-title">节信息</div>
   <div class="dr-rows">
     <div class="dr-row"><span class="dr-lbl">来源</span><span class="dr-val">${esc(s.source||'RaceBox')}</span></div>
     <div class="dr-row">
@@ -242,7 +249,7 @@
 ${s.needs_conversion ? `
 <div class="dr-card" id="dr-conv-card">
   <div class="dr-card-title">AIM XRK 转换</div>
-  <div class="dr-hint">该会话需先从 XRK 格式转换后才能使用。</div>
+  <div class="dr-hint">该节需先从 XRK 格式转换后才能使用。</div>
   <div class="dr-actions" style="margin-top:8px">
     <button class="btn btn-secondary btn-sm" id="dr-conv-btn">转换为 CSV</button>
     <span id="dr-conv-msg" class="status-msg"></span>
@@ -299,8 +306,13 @@ ${renderLapTagCard(s)}
 <div class="dr-card dr-align-card">
   <div class="dr-card-title">校准视频</div>
   ${autoNote}
-  <video id="sync-video" class="sync-video" preload="metadata"
-         src="${esc(videoUrl(vidPaths[0]))}"></video>
+  <div class="sync-frame-wrap">
+    <img id="sync-frame" class="sync-video" alt="">
+    <div id="sync-loading" class="sync-loading">
+      <span class="sync-spinner" aria-hidden="true"></span>
+      <span id="sync-loading-text">视频加载中…</span>
+    </div>
+  </div>
   <div class="sync-controls">
     <button class="btn btn-sm" id="sv-mm">◀◀ −1s</button>
     <button class="btn btn-sm" id="sv-m">◀ −1f</button>
@@ -362,7 +374,7 @@ ${renderLapTagCard(s)}
     `;
     banner.innerHTML = `
       <div style="margin-bottom:6px">
-        <strong>${count} other session${count !== 1 ? 's' : ''}</strong>
+        <strong>${count} 节</strong>
         also named <em>"${esc(oldName)}"</em>.<br>
         Rename all of them to <em>"${esc(newName)}"</em> as well?
       </div>
@@ -561,19 +573,81 @@ ${renderLapTagCard(s)}
   }
 
   function wireVideoSync(s, pane) {
-    const video  = pane.querySelector('#sync-video');
-    const scrub  = pane.querySelector('#sv-scrub');
+    const frameEl = pane.querySelector('#sync-frame');
+    const loadingEl = pane.querySelector('#sync-loading');
+    const loadingTextEl = pane.querySelector('#sync-loading-text');
+    const scrub = pane.querySelector('#sv-scrub');
     const timeEl = pane.querySelector('#sv-time');
     const markEl = pane.querySelector('#sv-mark-val');
     const offInp = pane.querySelector('#sv-off-input');
     const refLapSel = pane.querySelector('#sv-ref-lap');
+    if (!frameEl) return;
 
-    if (!video) return;
+    const videoPath = s.video_paths?.[0];
+    if (!videoPath) return;
 
-    let fps = 30; // default; will be updated from metadata
+    let fps = 30;
+    let frameCount = 0;
+    let curFrame = 0;
+    let busy = false;
+    let decoderSessionId = '';
 
-    // sync_offset = (video time at selected reference lap mark) - lap_elapsed_start
-    // semantics where sync_offset = video time at session start.
+    function setLoading(show, text = '视频加载中…') {
+      if (loadingTextEl) loadingTextEl.textContent = text;
+      if (loadingEl) loadingEl.style.display = show ? 'flex' : 'none';
+    }
+
+    function fmtVTime(t) {
+      const m = Math.floor(t / 60);
+      const sec = (t % 60).toFixed(3).padStart(6, '0');
+      return `${m}:${sec}`;
+    }
+    function frameToTime(idx) {
+      const f = Math.max(1e-6, Number(fps) || 30);
+      return Math.max(0, idx / f);
+    }
+    function timeToFrame(t) {
+      const f = Math.max(1e-6, Number(fps) || 30);
+      return Math.max(0, Math.round(Math.max(0, Number(t) || 0) * f));
+    }
+    function maxFrame() {
+      return Math.max(0, (frameCount || 0) - 1);
+    }
+    function applyMeta() {
+      if (scrub) {
+        scrub.min = '0';
+        scrub.max = String(maxFrame());
+        scrub.step = '1';
+        scrub.value = String(curFrame);
+      }
+      const t = frameToTime(curFrame);
+      if (timeEl) timeEl.textContent = fmtVTime(t);
+      if (offInp) offInp.value = t.toFixed(3);
+    }
+    async function decodeToFrame(targetFrame) {
+      if (busy) return;
+      busy = true;
+      setLoading(true, '正在解码帧…');
+      try {
+        if (!decoderSessionId) return;
+        const rsp = await API.decodeSessionSeek(decoderSessionId, targetFrame, null);
+        if (!rsp?.ok) {
+          frameEl.classList.remove('ready');
+          setLoading(true, '视频帧解码失败');
+          return;
+        }
+        if (Number(rsp.fps) > 0) fps = Number(rsp.fps);
+        frameCount = Number(rsp.frame_count || frameCount || 0);
+        curFrame = Math.max(0, Number(rsp.frame_idx || 0));
+        frameEl.src = `data:image/jpeg;base64,${rsp.image_b64 || ''}`;
+        frameEl.classList.add('ready');
+        applyMeta();
+        setLoading(false);
+      } finally {
+        busy = false;
+      }
+    }
+
     function getRefLapElapsed() {
       const laps = _lapDetails[s.csv_path] || [];
       if (!laps.length) return 0;
@@ -583,35 +657,37 @@ ${renderLapTagCard(s)}
       const firstTimed = laps.find(l => !l.is_outlap);
       return (firstTimed?.elapsed_start) || (laps[0]?.elapsed_start) || 0;
     }
-
-    function fmtVTime(t) {
-      const m = Math.floor(t / 60);
-      const sec = (t % 60).toFixed(3).padStart(6, '0');
-      return `${m}:${sec}`;
+    async function seekToRefLap() {
+      if (s.sync_offset == null) return;
+      await decodeToFrame(timeToFrame(s.sync_offset + getRefLapElapsed()));
     }
 
-    let _sought = false; // guard: seek once per wireVideoSync call
-
-    function seekToRefLap() {
-      if (s.sync_offset == null || !video.duration) return;
-      const refElapsed = getRefLapElapsed();
-      const refVid = Math.max(0, Math.min(video.duration, s.sync_offset + refElapsed));
-      _sought = true;
-      if (scrub) scrub.max = Math.round(video.duration * 1000);
-      video.currentTime = refVid;
-      if (scrub) scrub.value = Math.round(refVid * 1000);
-      if (timeEl) timeEl.textContent = fmtVTime(refVid);
-      if (offInp) offInp.value = refVid.toFixed(3);
-    }
-
-    video.addEventListener('loadedmetadata', () => {
-      scrub.max = Math.round(video.duration * 1000);
-      fps = 30;
-      if (!_sought) seekToRefLap();
-    });
-
-    // Fallback: canplay fires later than loadedmetadata and is more reliable in some WebView builds
-    video.addEventListener('canplay', () => { if (!_sought) seekToRefLap(); }, { once: true });
+    (async () => {
+      // Ensure only one persistent decode session stays alive for Data page.
+      let opened = null;
+      if (_syncDecoderSessionId && (_syncDecoderVideoPath !== videoPath)) {
+        await API.closeDecodeSession(_syncDecoderSessionId).catch(() => {});
+        _syncDecoderSessionId = '';
+        _syncDecoderVideoPath = '';
+      }
+      if (!_syncDecoderSessionId) {
+        opened = await API.openDecodeSession(videoPath, 10);
+        if (!opened?.ok || !opened.session_id) {
+          setLoading(true, '视频解码器启动失败');
+          return;
+        }
+        _syncDecoderSessionId = opened.session_id;
+        _syncDecoderVideoPath = videoPath;
+      }
+      decoderSessionId = _syncDecoderSessionId;
+      try {
+        const info = await API.getVideoFps(videoPath);
+        if (info?.ok && Number(info.fps) > 0) fps = Number(info.fps);
+      } catch (_) {}
+      if (Number.isFinite(opened?.fps) && Number(opened.fps) > 0) fps = Number(opened.fps);
+      if (s.sync_offset != null) await seekToRefLap();
+      else await decodeToFrame(0);
+    })();
 
     refLapSel?.addEventListener('change', async () => {
       const n = Number(refLapSel.value || 0);
@@ -619,53 +695,51 @@ ${renderLapTagCard(s)}
       await API.editSessionInfo(s.csv_path, { ...existing, sync_ref_lap_num: n });
       if (!_config.session_info) _config.session_info = {};
       _config.session_info[s.csv_path] = { ...existing, sync_ref_lap_num: n };
-      seekToRefLap();
+      await seekToRefLap();
     });
 
-    video.addEventListener('timeupdate', () => {
-      if (!video.seeking) {
-        scrub.value = Math.round(video.currentTime * 1000);
-        if (timeEl) timeEl.textContent = fmtVTime(video.currentTime);
-        if (offInp) offInp.value = video.currentTime.toFixed(3);
+    scrub?.addEventListener('input', async () => {
+      await decodeToFrame(parseInt(scrub.value || '0', 10) || 0);
+    });
+
+    async function step(frameDelta) {
+      if (!decoderSessionId) return;
+      if (Math.abs(frameDelta) > 10) {
+        const jump = Math.round((frameDelta > 0 ? 1 : -1) * Math.max(1, fps));
+        await decodeToFrame(curFrame + jump);
+        return;
       }
-    });
-
-    scrub?.addEventListener('input', () => {
-      _sought = true; // user is scrubbing; suppress any delayed auto-seek
-      video.currentTime = scrub.value / 1000;
-      if (timeEl) timeEl.textContent = fmtVTime(video.currentTime);
-      if (offInp) offInp.value = (scrub.value / 1000).toFixed(3);
-    });
-
-    function step(frameDelta) {
-      const dt = Math.abs(frameDelta) > 10 ? (frameDelta > 0 ? 1 : -1) : frameDelta / fps;
-      video.currentTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + dt));
+      if (busy) return;
+      busy = true;
+      try {
+        const rsp = await API.decodeSessionStep(decoderSessionId, frameDelta > 0 ? 1 : -1);
+        if (!rsp?.ok) return;
+        if (Number(rsp.fps) > 0) fps = Number(rsp.fps);
+        frameCount = Number(rsp.frame_count || frameCount || 0);
+        curFrame = Math.max(0, Number(rsp.frame_idx || 0));
+        frameEl.src = `data:image/jpeg;base64,${rsp.image_b64 || ''}`;
+        applyMeta();
+      } finally {
+        busy = false;
+      }
     }
 
-    pane.querySelector('#sv-mm')?.addEventListener('click', () => step(-fps));
-    pane.querySelector('#sv-m')?.addEventListener ('click', () => step(-1));
-    pane.querySelector('#sv-p')?.addEventListener ('click', () => step(1));
-    pane.querySelector('#sv-pp')?.addEventListener('click', () => step(fps));
+    pane.querySelector('#sv-mm')?.addEventListener('click', () => { step(-fps); });
+    pane.querySelector('#sv-m')?.addEventListener('click', () => { step(-1); });
+    pane.querySelector('#sv-p')?.addEventListener('click', () => { step(1); });
+    pane.querySelector('#sv-pp')?.addEventListener('click', () => { step(fps); });
 
-    // Mark selected reference lap and derive session-start sync_offset.
     pane.querySelector('#sv-mark')?.addEventListener('click', async () => {
-      const rawTime   = video.currentTime;
+      const rawTime = frameToTime(curFrame);
       const refElapsed = getRefLapElapsed();
-      const offset    = rawTime - refElapsed;
+      const offset = rawTime - refElapsed;
       s.sync_offset = offset;
       s.sync_source = 'user';
       await saveOffset(s);
       renderLeft();
-      renderRight(); // re-renders the panel so the auto banner and button label update
+      renderRight();
+      if (markEl) markEl.textContent = '✓ saved';
     });
-
-    // If metadata already available (e.g. browser cache), seek immediately.
-    if (video.readyState >= 1 && s.sync_offset != null) {
-      seekToRefLap();
-    } else if (video.readyState < 1) {
-      // Force load in case preload="metadata" was suppressed (WebView2 cache behaviour)
-      video.load();
-    }
   }
 
   // Called after renderRight() from the auto_sync_progress 'done' handler.
@@ -675,23 +749,9 @@ ${renderLapTagCard(s)}
   // run before video.load() finished.  This function does one final check and
   // seeks if the element is now ready.
   function _seekVideoAfterAutoSync(s, syncOffset) {
-    const pane = _container?.querySelector('#data-right');
-    const vid  = pane?.querySelector('#sync-video');
-    if (!vid || vid.readyState < 1 || !vid.duration) return;
-    const laps = _lapDetails[s.csv_path] || [];
-    const refLapNum = Number(_config?.session_info?.[s.csv_path]?.sync_ref_lap_num || 0);
-    const picked = laps.find(l => Number(l.lap_num) === refLapNum);
-    const fallback = laps.find(l => !l.is_outlap) || laps[0];
-    const refElapsed = (picked?.elapsed_start ?? fallback?.elapsed_start ?? 0);
-    const refVid = Math.max(0, Math.min(vid.duration, syncOffset + refElapsed));
-    const scrub  = pane.querySelector('#sv-scrub');
-    const timeEl = pane.querySelector('#sv-time');
-    const offInp = pane.querySelector('#sv-off-input');
-    if (scrub) scrub.max = Math.round(vid.duration * 1000);
-    vid.currentTime = refVid;
-    if (scrub) scrub.value = Math.round(refVid * 1000);
-    if (timeEl) timeEl.textContent = `${Math.floor(refVid / 60)}:${(refVid % 60).toFixed(3).padStart(6, '0')}`;
-    if (offInp) offInp.value = refVid.toFixed(3);
+    // Pure frame-player mode re-renders right panel and wireVideoSync seeks by syncOffset.
+    // Keep this hook as a no-op for compatibility with existing event flow.
+    return;
   }
 
   async function saveOffset(s) {
@@ -712,8 +772,8 @@ ${renderLapTagCard(s)}
     const footer = _container?.querySelector('#data-footer');
     if (!footer) return;
     const hint = _sessions.length
-      ? `共 ${_sessions.length} 个会话，请选择一个开始。`
-      : '请选择一个会话开始。';
+      ? `共 ${_sessions.length} 节，请选择一节开始。`
+      : '请选择一节开始。';
     footer.innerHTML = `<span class="footer-hint">${esc(hint)}</span>`;
   }
 
@@ -1187,13 +1247,13 @@ ${renderLapTagCard(s)}
 
     <!-- Right: detail + sync -->
     <div class="data-right-panel" id="data-right">
-      <div class="dr-empty">请选择一个会话查看详情并校准视频。</div>
+      <div class="dr-empty">请选择一节查看详情并校准视频。</div>
     </div>
 
   </div>
 
   <div class="data-footer" id="data-footer">
-    <span class="footer-hint">请选择一个会话开始。</span>
+    <span class="footer-hint">请选择一节开始。</span>
   </div>
 </div>`;
 
@@ -1228,11 +1288,11 @@ ${renderLapTagCard(s)}
       if (!s) return;
       if (detail.status === 'processing') {
         _asIdx = detail.current; _asTotal = detail.total;
-        setStatus(`自动同步中：第 ${_asIdx}/${_asTotal} 个会话…`);
+        setStatus(`自动同步中：第 ${_asIdx}/${_asTotal} 节…`);
       } else if (detail.status === 'checking') {
         const conf = detail.confidence?.toFixed(2);
         const secs = detail.vid_t?.toFixed(0);
-        setStatus(`自动同步中：第 ${_asIdx}/${_asTotal} 个会话 — 已解码 ${secs}s 视频，置信度 ${conf}×（需 6×）`);
+        setStatus(`自动同步中：第 ${_asIdx}/${_asTotal} 节 — 已解码 ${secs}s 视频，置信度 ${conf}×（需 6×）`);
       } else if (detail.status === 'done') {
         _asDone++;
         // Don't overwrite if the user already confirmed this session while we were processing
@@ -1265,7 +1325,7 @@ ${renderLapTagCard(s)}
       const summary = _asDone > 0 || _asFailed > 0
         ? ` — 匹配 ${_asDone}，跳过 ${_asFailed}`
         : '';
-      setStatus(`已找到 ${_sessions.length} 个会话。自动同步完成${summary}。`);
+      setStatus(`已找到 ${_sessions.length} 节。自动同步完成${summary}。`);
     }));
 
     // Await the video server port before rendering so videoUrl() is correct from the start
@@ -1300,7 +1360,7 @@ ${renderLapTagCard(s)}
         applyOffsets();
         State.set('sessions', _sessions);
         renderLeft();
-        setStatus(`已加载 ${_sessions.length} 个缓存会话，后台重扫中…`);
+        setStatus(`已加载 ${_sessions.length} 节缓存，后台重扫中…`);
         enrichMeta(_sessions);
         // Auto-scan in background
         setTimeout(() => doScan(true), 200);
@@ -1319,6 +1379,11 @@ ${renderLapTagCard(s)}
     if (_container?._resizerCleanup) _container._resizerCleanup();
     _unlistenFns.forEach(fn => fn());
     _unlistenFns = [];
+    if (_syncDecoderSessionId) {
+      API.closeDecodeSession(_syncDecoderSessionId).catch(() => {});
+      _syncDecoderSessionId = '';
+      _syncDecoderVideoPath = '';
+    }
     _container = null;
     // Module state (_sessions, _meta, etc.) preserved intentionally across navigations
   }

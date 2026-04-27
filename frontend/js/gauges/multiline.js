@@ -52,7 +52,11 @@ const GaugeMultiline = {
     const cW = w * (0.95 - legendFrac - 0.03) - cX;
     const cH = h * 0.76;
 
-    const fsLeg = Math.max(8, Math.min(Math.round(8 * sc), Math.round(h * 0.09)));
+    const gChannels = new Set(['gforce_total', 'gforce_lat', 'gforce_lon', 'g_meter']);
+    const gValueTable = entries.length > 0 && entries.every(e => gChannels.has(e.channel || ''));
+    const fsLeg = gValueTable
+      ? Math.max(14, Math.min(Math.round(16 * sc), Math.round(h * 0.17)))
+      : Math.max(8, Math.min(Math.round(8 * sc), Math.round(h * 0.09)));
 
     // Clip to chart area
     ctx.save();

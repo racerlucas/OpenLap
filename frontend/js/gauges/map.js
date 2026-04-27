@@ -1,10 +1,10 @@
 /**
  * map.js — GPS circuit map gauge.
  *
- * Mirrors styles/map_circuit.py and styles/map_progress.py
+ * Mirrors styles/map_circuit.py and styles/map_zoomed.py
  *
  * data keys: lats (array), lons (array), cur_idx (int)
- * theme keys: map_bg_rgba, map_track_outer, map_track_inner, map_driven, map_dot, map_start
+ * theme keys: map_bg_rgba, map_track_outer, map_track_inner, map_dot, map_start
  */
 
 /**
@@ -32,6 +32,20 @@ function _strokeSmooth(ctx, xs, ys, closed) {
   }
 }
 
+function _transformPoint(x, y, cx, cy, rotateDeg, mirrorX, mirrorY) {
+  let dx = x - cx;
+  let dy = y - cy;
+  if (mirrorX) dx = -dx;
+  if (mirrorY) dy = -dy;
+  const rad = (rotateDeg || 0) * Math.PI / 180;
+  const cr = Math.cos(rad);
+  const sr = Math.sin(rad);
+  return {
+    x: cx + (dx * cr - dy * sr),
+    y: cy + (dx * sr + dy * cr),
+  };
+}
+
 const GaugeMap = {
   render(ctx, data, w, h) {
     const theme = GaugeBase.getTheme(data.theme || 'Dark');
@@ -48,6 +62,9 @@ const GaugeMap = {
     const osmLats  = data.track_map_lats  || [];
     const osmLons  = data.track_map_lons  || [];
     const osmAreas = data.track_map_areas || [];
+    const rotateDeg = Number(data.map_rotate_deg || 0);
+    const mirrorX = data.map_mirror_x === true;
+    const mirrorY = data.map_mirror_y === true;
 
     if (lats.length < 2 || lons.length < 2) {
       ctx.fillStyle    = theme.label || '#4e6578';
@@ -77,12 +94,15 @@ const GaugeMap = {
     const scale  = Math.min(scaleX, scaleY);
     const offX   = w * pad + (availW - spanLon * scale) / 2;
     const offY   = h * pad + (availH - spanLat * scale) / 2;
+    const tcx = w * 0.5;
+    const tcy = h * 0.5;
 
     function toScreen(lat, lon) {
-      return {
+      const raw = {
         x: offX + (lon - minLon) * scale,
         y: h - offY - (lat - minLat) * scale,  // flip y (north up)
       };
+      return _transformPoint(raw.x, raw.y, tcx, tcy, rotateDeg, mirrorX, mirrorY);
     }
 
     // Pre-project screen coordinates once per dataset
@@ -149,15 +169,6 @@ const GaugeMap = {
     ctx.lineWidth   = Math.max(2, w * 0.015);
     ctx.stroke();
 
-    // Driven portion (from start to cur_idx) — smoothed open segment
-    if (curIdx > 0) {
-      const di = Math.min(curIdx, n - 1) + 1;
-      _strokeSmooth(ctx, gpsXs.slice(0, di), gpsYs.slice(0, di), false);
-      ctx.strokeStyle = theme.map_driven || '#ffffff';
-      ctx.lineWidth   = Math.max(1.5, w * 0.010);
-      ctx.stroke();
-    }
-
     // Start marker
     const pStart = toScreen(lats[0], lons[0]);
     ctx.beginPath();
@@ -196,6 +207,9 @@ const GaugeMap = {
     const osmLats    = data.track_map_lats  || [];
     const osmLons    = data.track_map_lons  || [];
     const osmAreas   = data.track_map_areas || [];
+    const rotateDeg  = Number(data.map_rotate_deg || 0);
+    const mirrorX    = data.map_mirror_x === true;
+    const mirrorY    = data.map_mirror_y === true;
 
     if (lats.length < 2) {
       ctx.fillStyle    = theme.label || '#4e6578';
@@ -222,10 +236,11 @@ const GaugeMap = {
     const cy    = h / 2;
 
     function toScreen(lat, lon) {
-      return {
+      const raw = {
         x: cx + (lon - centerLon) * LON_M * scale,
         y: cy - (lat - centerLat) * LAT_M * scale,
       };
+      return _transformPoint(raw.x, raw.y, cx, cy, rotateDeg, mirrorX, mirrorY);
     }
 
     // Clip to gauge bounds
@@ -310,15 +325,6 @@ const GaugeMap = {
       _strokeSmooth(ctx, refXs, refYs, true);
       ctx.strokeStyle = '#cc44ff';
       ctx.lineWidth   = Math.max(2, w * 0.013);
-      ctx.stroke();
-    }
-
-    // Driven portion — smoothed open segment
-    if (curIdx > 0) {
-      const di = Math.min(curIdx, n - 1) + 1;
-      _strokeSmooth(ctx, gpsXsZ.slice(0, di), gpsYsZ.slice(0, di), false);
-      ctx.strokeStyle = theme.map_driven || '#ffffff';
-      ctx.lineWidth   = Math.max(1.5, w * 0.010);
       ctx.stroke();
     }
 

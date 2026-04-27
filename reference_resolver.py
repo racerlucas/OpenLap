@@ -30,6 +30,8 @@ def resolve_reference_lap(
 
     if ref_mode == 'session_best':
         lap = sess.fastest_lap
+        if lap is not None:
+            setattr(lap, '_source_csv_path', getattr(sess, 'csv_path', '') or '')
         return (lap, f'session fastest ({lap.duration:.3f}s)') if lap else (None, 'no timed laps')
 
     if ref_mode == 'session_best_so_far':
@@ -38,6 +40,8 @@ def resolve_reference_lap(
         else:
             prev = [l for l in sess.timed_laps if l.lap_num < current_lap_num]
             lap  = min(prev, key=lambda l: l.duration) if prev else None
+        if lap is not None:
+            setattr(lap, '_source_csv_path', getattr(sess, 'csv_path', '') or '')
         return (lap, f'best so far ({lap.duration:.3f}s)') if lap else (None, 'no prior laps')
 
     if ref_mode in ('personal_best', 'day_best'):
@@ -61,6 +65,7 @@ def _resolve_cross_session(ref_mode, sess, session_info, scan_cache, load_sessio
         current_date = sess.start_time.strftime('%Y-%m-%d')
 
     best_lap = None
+    best_csv = ''
     best_dur = float('inf')
     checked  = 0
 
@@ -97,6 +102,7 @@ def _resolve_cross_session(ref_mode, sess, session_info, scan_cache, load_sessio
             if lap and lap.duration < best_dur:
                 best_dur = lap.duration
                 best_lap = lap
+                best_csv = csv_path
         except Exception as e:
             logger.debug('reference_resolver: could not load %s: %s', csv_path, e)
 
@@ -105,6 +111,7 @@ def _resolve_cross_session(ref_mode, sess, session_info, scan_cache, load_sessio
                  label, checked, best_dur if best_lap else float('nan'))
 
     if best_lap:
+        setattr(best_lap, '_source_csv_path', best_csv)
         return best_lap, f'{label} ({best_lap.duration:.3f}s, {checked} sessions scanned)'
     if checked == 0:
         return None, f'no {label} found — no sessions with track="{current_track}" in cache'
@@ -122,6 +129,7 @@ def _resolve_manual(ref_lap_csv_path, ref_lap_num, load_session_fn):
         sess = load_session_fn(ref_lap_csv_path)
         lap  = next((l for l in sess.timed_laps if l.lap_num == ref_lap_num), None)
         if lap:
+            setattr(lap, '_source_csv_path', ref_lap_csv_path)
             return lap, f'manual lap {ref_lap_num} ({lap.duration:.3f}s)'
         return None, f'manual lap {ref_lap_num} not found in session'
     except Exception as e:

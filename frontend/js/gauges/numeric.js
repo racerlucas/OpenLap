@@ -27,7 +27,9 @@ const GaugeNumeric = {
     let txt;
     if (channel === 'lap_time') {
       txt     = GaugeBase.fmtValue(value, 'lap_time');
-      fsValue = Math.max(8, Math.min(Math.round(20 * sc), Math.round(w * 0.22)));
+      // Tighter layout: large readout, label just above, almost no bottom gap
+      fsValue = Math.max(11, Math.min(Math.round(28 * sc), Math.round(w * 0.32)));
+      fsLabel = Math.max(6, Math.min(Math.round(10 * sc), Math.round(w * 0.11)));
     } else {
       txt = GaugeBase.fmtValue(value, channel);
     }
@@ -35,7 +37,22 @@ const GaugeNumeric = {
     ctx.textBaseline = 'middle';
     ctx.textAlign    = 'center';
 
-    // Label (top 78% position)
+    if (channel === 'lap_time') {
+      ctx.fillStyle = theme.label;
+      ctx.font      = `${fsLabel}px 'Segoe UI', sans-serif`;
+      ctx.fillText(label, w * 0.5, h * 0.20);
+      ctx.fillStyle  = theme.text;
+      ctx.font       = `bold ${fsValue}px 'Segoe UI', sans-serif`;
+      ctx.fillText(txt, w * 0.5, h * 0.56);
+      if (unit && String(unit).trim()) {
+        ctx.fillStyle = theme.unit;
+        ctx.font      = `${fsUnit}px 'Segoe UI', sans-serif`;
+        ctx.fillText(unit, w * 0.5, h * 0.82);
+      }
+      return;
+    }
+
+    // Label (top)
     ctx.fillStyle = theme.label;
     ctx.font      = `${fsLabel}px 'Segoe UI', sans-serif`;
     ctx.fillText(label, w * 0.5, h * 0.22);
@@ -45,7 +62,7 @@ const GaugeNumeric = {
     ctx.font       = `bold ${fsValue}px 'Segoe UI', sans-serif`;
     ctx.fillText(txt, w * 0.5, h * 0.50);
 
-    // Unit (bottom 24% position)
+    // Unit (bottom)
     ctx.fillStyle = theme.unit;
     ctx.font      = `${fsUnit}px 'Segoe UI', sans-serif`;
     ctx.fillText(unit, w * 0.5, h * 0.78);

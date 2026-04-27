@@ -199,6 +199,9 @@ function fmtValue(value, channel) {
     return value >= 60 ? `${m}:${s}` : value.toFixed(3);
   }
   if (channel === 'lean') return value.toFixed(1);
+  if (channel === 'gforce_total' || channel === 'gforce_lat' || channel === 'gforce_lon' || channel === 'g_meter') {
+    return value.toFixed(1);
+  }
   if (channel === 'delta_time') {
     if (value == null) return '—';
     return (value >= 0 ? '+' : '') + value.toFixed(3);

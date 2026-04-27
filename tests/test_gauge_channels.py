@@ -42,3 +42,9 @@ def test_all_known_channels_work():
     for channel in GAUGE_CHANNELS:
         result = dummy_gauge_data(channel)
         assert result['channel'] == channel
+
+
+def test_gforce_total_is_magnitude_of_gx_gy():
+    history = [{'gx': 3.0, 'gy': 4.0}]
+    result = gauge_data('gforce_total', history)
+    assert result['value'] == pytest.approx(5.0)

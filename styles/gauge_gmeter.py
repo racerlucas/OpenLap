@@ -93,10 +93,11 @@ def render(data: dict, w: int, h: int):
     ax.text(-g_range * 1.12, 0, 'L',      ha='right',  va='center',
             color=label_col, fontsize=fs_ax, fontfamily='sans-serif')
 
-    # Current G readout — compact, shown at the bottom of the bg area
-    fs_val = max(5, int(size * 0.065))
+    # Current G readout — enlarged for readability
+    fs_val = max(10, int(size * 0.13))
+    g_total = np.hypot(gx_now, gy_now)
     ax_bg.text(0.50, 0.06,
-               f'{gx_now:+.2f}  /  {gy_now:+.2f}',
+               f'{g_total:.1f} G',
                ha='center', va='bottom', color='#ccccdd',
                fontsize=fs_val, fontfamily='sans-serif',
                transform=ax_bg.transAxes)

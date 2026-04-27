@@ -6,15 +6,11 @@ This module owns blend_rgba, default_layout, and the multiprocessing worker.
 """
 from __future__ import annotations
 import logging
-import os
 from typing import Tuple
 from overlay_utils import blend_rgba, blend_rgba_onto_rgba, scale_factor
+from gauge_channels import _ema_smooth
 
 logger = logging.getLogger(__name__)
-
-# Per-process image cache: (path, mtime) → RGBA ndarray
-_IMAGE_CACHE: dict = {}
-
 
 def default_layout() -> dict:
     """Return a default overlay layout dict (used when no config is present)."""
@@ -120,31 +116,17 @@ def render_frame_worker(args: Tuple) -> bytes:
             continue
 
         if channel == 'image':
-            image_path = g.get('image_path', '')
-            if not image_path or not os.path.isfile(image_path):
-                continue
-            if os.path.getsize(image_path) > 50 * 1024 * 1024:
-                logger.debug('Skipping oversized image (>50 MB): %s', image_path)
-                continue
+            gd = {
+                'image_path': g.get('image_path', ''),
+                'opacity': float(g.get('opacity', 1.0)),
+                'fit': g.get('fit', 'contain'),
+                '_theme': theme,
+            }
             try:
-                import numpy as np
-                from PIL import Image as _PILImage
-                mtime = os.path.getmtime(image_path)
-                cache_key = (image_path, mtime, gw, gh)
-                rgba = _IMAGE_CACHE.get(cache_key)
-                if rgba is None:
-                    img = _PILImage.open(image_path).convert('RGBA')
-                    img = img.resize((gw, gh), _PILImage.LANCZOS)
-                    rgba = np.array(img)
-                    _IMAGE_CACHE[cache_key] = rgba
-                # Apply opacity from gauge config
-                opacity = float(g.get('opacity', 1.0))
-                if opacity < 1.0:
-                    rgba = rgba.copy()
-                    rgba[:, :, 3] = (rgba[:, :, 3] * opacity).astype(rgba.dtype)
-                _blend(frame, rgba, gx, gy)
+                img = render_style('gauge', style, gd, gw, gh)
+                _blend(frame, img, gx, gy)
             except Exception as e:
-                logger.debug('Failed to render image gauge %s: %s', image_path, e)
+                logger.debug('Failed to render image gauge %s: %s', gd.get('image_path', ''), e)
             continue
 
         if channel == 'map':
@@ -166,6 +148,9 @@ def render_frame_worker(args: Tuple) -> bytes:
                 '_theme': theme,
                 'zoom_radius_m':  g.get('zoom_radius_m', 150),
                 'show_ref':       g.get('show_ref', True),
+                'map_rotate_deg': g.get('map_rotate_deg', 0),
+                'map_mirror_x':   g.get('map_mirror_x', False),
+                'map_mirror_y':   g.get('map_mirror_y', False),
                 'ref_lats':       ref_lats,
                 'ref_lons':       ref_lons,
                 'ref_cur_idx':    ref_cur_idx,
@@ -196,14 +181,24 @@ def render_frame_worker(args: Tuple) -> bytes:
                     {**s, 'done': s['done'] and s.get('boundary_elapsed', float('inf')) <= cur_elapsed}
                     for s in sectors
                 ]
+                # Per-gauge style options saved in layout (not part of gauge_data())
+                if channel == 'delta_time' and style == 'Delta Bar':
+                    for _k in ('delta_bar_full_scale', 'delta_bar_curve'):
+                        if _k in g:
+                            gd[_k] = g[_k]
                 if channel == 'speed':
                     gd['max_val'] = max_speed
                 if ref_history:
                     hk = GAUGE_CHANNELS.get(channel, GAUGE_CHANNELS['speed'])['hist_key']
-                    gd['ref_history_vals'] = [p.get(hk, 0.0) for p in ref_history]
+                    ref_vals = [p.get(hk, 0.0) for p in ref_history]
+                    if channel in ('gforce_total', 'gforce_lat', 'gforce_lon', 'g_meter'):
+                        ref_vals = _ema_smooth(ref_vals)
+                    gd['ref_history_vals'] = ref_vals
                 if channel == 'g_meter':
-                    gd['history_gy'] = [p.get('gy', 0.0) for p in history]
-                    gd['value_gy']   = history[-1].get('gy', 0.0) if history else 0.0
+                    gy_hist = [p.get('gy', 0.0) for p in history]
+                    gy_hist = _ema_smooth(gy_hist)
+                    gd['history_gy'] = gy_hist
+                    gd['value_gy']   = gy_hist[-1] if gy_hist else 0.0
             try:
                 img = render_style('gauge', style, gd, gw, gh)
                 _blend(frame, img, gx, gy)

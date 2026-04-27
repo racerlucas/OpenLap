@@ -46,6 +46,7 @@ const GaugeInfo = {
     const selected = (data.selected_fields && data.selected_fields.length > 0)
       ? data.selected_fields
       : INFO_FIELDS_DEFAULT;
+    const align = data.text_align || 'left';
 
     const fields = selected
       .filter(k => allValues[k])
@@ -67,7 +68,10 @@ const GaugeInfo = {
     const fsValue = Math.max(10, Math.round(rowPx * 0.48));
 
     ctx.textBaseline = 'middle';
-    ctx.textAlign    = 'left';
+    let xText = padL;
+    if (align === 'center') xText = w * 0.5;
+    else if (align === 'right') xText = w * 0.92;
+    ctx.textAlign = (align === 'center') ? 'center' : (align === 'right' ? 'right' : 'left');
 
     for (let i = 0; i < fields.length; i++) {
       const [lbl, val] = fields[i];
@@ -77,11 +81,11 @@ const GaugeInfo = {
 
       ctx.fillStyle = theme.label;
       ctx.font      = `${fsLabel}px 'Segoe UI', sans-serif`;
-      ctx.fillText(lbl, padL, yLbl);
+      ctx.fillText(lbl, xText, yLbl);
 
       ctx.fillStyle  = theme.text;
       ctx.font       = `bold ${fsValue}px 'Segoe UI', sans-serif`;
-      ctx.fillText(val, padL, yVal);
+      ctx.fillText(val, xText, yVal);
     }
   }
 };

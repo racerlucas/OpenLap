@@ -19,8 +19,9 @@ const GaugeDelta = {
 
     GaugeBase.drawBackground(ctx, w, h, theme);
 
-    const value   = data.value ?? 0;
-    const history = data.history_vals || [0];
+    const hasValue = data.value != null && Number.isFinite(data.value);
+    const value   = hasValue ? Number(data.value) : 0;
+    const history = data.history_vals || [];
     const label   = (data.label || 'Delta').toUpperCase();
 
     const sc = Math.sqrt((w / 120) * (h / 160));
@@ -28,10 +29,10 @@ const GaugeDelta = {
     const fsLabel = Math.max(8, Math.min(Math.round(10 * sc), Math.round(w * 0.12)));
     const fsValue = Math.max(12, Math.min(Math.round(28 * sc), Math.round(w * 0.16)));
 
-    const colour = this._colour(value);
+    const colour = hasValue ? this._colour(value) : theme.label;
 
     // Sign + value text
-    const txt = (value >= 0 ? '+' : '\u2212') + Math.abs(value).toFixed(3);
+    const txt = hasValue ? ((value >= 0 ? '+' : '\u2212') + Math.abs(value).toFixed(3)) : '—';
 
     ctx.textBaseline = 'middle';
     ctx.textAlign    = 'center';

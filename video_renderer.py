@@ -19,6 +19,18 @@ logger = logging.getLogger(__name__)
 from utils import _run, _popen
 import cv2
 import numpy as np
+from telemetry_algorithms import (
+    LAP_TIME_HOLD_AFTER_FINISH_S,
+    MAP_MAX_POINTS,
+    MAP_REF_SMOOTH_WINDOW,
+    MAP_SMOOTH_WINDOW,
+    MAP_TIMED_SAMPLES,
+    build_effective_session_meta,
+    build_complete_map_track,
+    build_map_track,
+    compute_best_so_far_state,
+    lap_time_display_value,
+)
 
 from data_model import Session, Lap
 from overlay_worker import render_frame_worker, scale_factor, default_layout
@@ -292,6 +304,7 @@ def _setup_delta_time(reference_lap, job, session):
         return np.array([getattr(p, attr, 0.0) for p in ref_pts], dtype=float)[ref_u_idx]
 
     ref_channels = {
+        't':            ref_elapsed_full[ref_u_idx],
         'speed':        _ref_arr('speed'),
         'gx':           _ref_arr('gforce_x'),
         'gy':           _ref_arr('gforce_y'),
@@ -349,44 +362,13 @@ def _setup_delta_time(reference_lap, job, session):
 
 def _build_session_meta(session, info_overrides: dict = None) -> dict:
     """Assemble the session-info dict passed to the info gauge."""
-    meta: dict = {
-        'info_track':   session.track        or '',
-        'info_vehicle': getattr(session, 'vehicle', '') or '',
-        'info_session': session.session_type or '',
-        'info_source':  session.source       or '',
-        'info_date':    '',
-        'info_time':    '',
-        'info_weather': '',
-        'info_wind':    '',
-    }
-    if session.date_utc:
-        try:
-            from datetime import datetime
-            dt = datetime.fromisoformat(session.date_utc.replace('Z', '+00:00'))
-            meta['info_date'] = dt.strftime('%Y-%m-%d')
-            meta['info_time'] = dt.strftime('%H:%M')
-        except Exception:
-            pass
-
-    # Apply manual per-session overrides (non-empty values only)
-    for key in ('info_track', 'info_vehicle', 'info_session'):
-        if info_overrides and info_overrides.get(key):
-            meta[key] = info_overrides[key]
-
-    # Fetch weather from Open-Meteo when GPS and date are available
-    if session.date_utc:
-        try:
-            first_gps = next(
-                (p for p in session.all_points
-                 if getattr(p, 'lat', 0.0) and getattr(p, 'lon', 0.0)),
-                None)
-            if first_gps:
-                from weather import fetch_weather
-                meta['info_weather'], meta['info_wind'] = fetch_weather(
-                    first_gps.lat, first_gps.lon, session.date_utc)
-        except Exception:
-            pass
-
+    from weather import fetch_weather
+    meta = build_effective_session_meta(
+        session,
+        info_overrides=info_overrides,
+        weather_fetcher=fetch_weather,
+    )
+    meta['info_source'] = getattr(session, 'source', '') or ''
     return meta
 
 
@@ -396,20 +378,22 @@ def _build_map_data(job, session, show_map):
     Returns (map_lats, map_lons, map_arr_np) where map_arr_np is shape (N, 2)
     or None when show_map is False / no GPS data is available.
     """
-    import numpy as np
-
     if not show_map:
         return [], [], None
 
-    pts  = job.lap.points if job.lap else session.all_points
-    step = max(1, len(pts) // 600)
-    ds   = pts[::step]
-
-    lats = [p.lat for p in ds]
-    lons = [p.lon for p in ds]
+    lats, lons = build_complete_map_track(
+        getattr(session, 'laps', []),
+        max_points=MAP_MAX_POINTS,
+        smooth_window=MAP_SMOOTH_WINDOW,
+        timed_samples=MAP_TIMED_SAMPLES,
+    )
+    if not lats:
+        pts = job.lap.points if job.lap else session.all_points
+        lats, lons = build_map_track(pts, max_points=MAP_MAX_POINTS, smooth_window=MAP_SMOOTH_WINDOW)
     if not lats:
         return [], [], None
 
+    import numpy as np
     arr = np.array(list(zip(lats, lons)), dtype=np.float64)
     return lats, lons, arr
 
@@ -570,29 +554,13 @@ def render_lap(
     _ref_map_lons: list = []
     _ref_lap_duration: float = 0.0
     if reference_lap and reference_lap.points:
-        step = max(1, len(reference_lap.points) // 600)
-        _ref_map_lats = [p.lat for p in reference_lap.points[::step]]
-        _ref_map_lons = [p.lon for p in reference_lap.points[::step]]
+        _ref_map_lats, _ref_map_lons = build_map_track(
+            reference_lap.points, max_points=MAP_MAX_POINTS, smooth_window=MAP_REF_SMOOTH_WINDOW
+        )
         _ref_lap_duration = reference_lap.duration
-        # Smooth the reference GPS track to reduce dot jitter caused by GPS noise.
-        # A window of 9 samples over ~600 points gives gentle smoothing without
-        # distorting the track shape.
-        if len(_ref_map_lats) > 9:
-            _w = np.ones(9) / 9
-            _ref_map_lats = np.convolve(_ref_map_lats, _w, mode='same').tolist()
-            _ref_map_lons = np.convolve(_ref_map_lons, _w, mode='same').tolist()
 
-    # ── Lap-scoreboard pre-computation ────────────────────────────────────────
-    # For each lap number, store the best completed timed-lap duration seen
-    # BEFORE that lap started (lap 1 → None, lap 2 → lap-1 time, etc.)
-    _total_timed = len(session.timed_laps)
-    _best_by_lap: dict = {}
-    _running_best = None
-    for _lap in sorted(session.timed_laps, key=lambda l: l.lap_num):
-        _best_by_lap[_lap.lap_num] = _running_best
-        if _running_best is None or _lap.duration < _running_best:
-            _running_best = _lap.duration
-    _best_fallback = _running_best   # used for outlap / inlap / beyond last timed lap
+    # ── Lap-scoreboard pre-computation (shared with preview path) ────────────
+    _total_timed, _best_by_lap, _best_fallback = compute_best_so_far_state(session.laps)
 
     # ── History buffers (deque gives O(1) eviction, no manual trimming) ───────
     HISTORY_MAX   = int(10.0 * fps)
@@ -624,12 +592,19 @@ def render_lap(
 
                 pt = session.interpolate_at(sess_t)
                 if pt:
-                    # For per-lap export: clamp to [0, lap_dur] so the timer
-                    # stays sane during padding.  For full-session export: use
-                    # pt.lap_elapsed directly — it resets to 0 at each lap
-                    # boundary as recorded in the telemetry.
+                    # For per-lap export:
+                    # - keep timer within lap bounds while the lap is active
+                    # - hold final lap time for a short post-finish window
+                    # - then resume live lap_elapsed so other timeline context
+                    #   stays coherent after the hold
+                    # For full-session export: always use live pt.lap_elapsed.
                     if job.gpx_start is not None:
-                        lap_t_display = min(raw_lap_t, lap_dur)
+                        lap_t_display = lap_time_display_value(
+                            raw_lap_t=raw_lap_t,
+                            lap_dur=lap_dur,
+                            live_lap_elapsed=pt.lap_elapsed,
+                            hold_s=LAP_TIME_HOLD_AFTER_FINISH_S,
+                        )
                     else:
                         lap_t_display = pt.lap_elapsed
 
@@ -658,14 +633,18 @@ def render_lap(
                     if _ref_dist_u is not None:
                         try:
                             d_ref = min(cur_d, float(_ref_dist_u[-1]))
+                            ref_t = float(np.interp(d_ref, _ref_dist_u, _ref_channels['t']))
+                            ref_gx = float(np.interp(d_ref, _ref_dist_u, _ref_channels['gx']))
+                            ref_gy = float(np.interp(d_ref, _ref_dist_u, _ref_channels['gy']))
                             _ref_hist_buf.append({
                                 'speed':        float(np.interp(d_ref, _ref_dist_u, _ref_channels['speed'])),
-                                'gx':           float(np.interp(d_ref, _ref_dist_u, _ref_channels['gx'])),
-                                'gy':           float(np.interp(d_ref, _ref_dist_u, _ref_channels['gy'])),
+                                'gx':           ref_gx,
+                                'gy':           ref_gy,
+                                'g_total':      math.hypot(ref_gx, ref_gy),
                                 'lean':         float(np.interp(d_ref, _ref_dist_u, _ref_channels['lean'])),
                                 'rpm':          float(np.interp(d_ref, _ref_dist_u, _ref_channels['rpm'])),
                                 'exhaust_temp': float(np.interp(d_ref, _ref_dist_u, _ref_channels['exhaust_temp'])),
-                                't':            0.0,
+                                't':            ref_t,
                                 'delta_time':   0.0,
                                 'alt':          float(np.interp(d_ref, _ref_dist_u, _ref_channels.get('alt', [0.0]*len(_ref_dist_u)))),
                             })
