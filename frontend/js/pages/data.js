@@ -112,7 +112,7 @@
     if (!pane) return;
 
     if (_sessions.length === 0) {
-      pane.innerHTML = `<div class="dl-empty">暂无会话，请先在设置中配置目录后点击扫描。</div>`;
+      pane.innerHTML = `<div class="dl-empty">暂无节次，请先在设置中配置目录后点击扫描。</div>`;
       return;
     }
 
@@ -276,6 +276,14 @@ ${renderLapTagCard(s)}
     const offVal    = off != null ? off.toFixed(3) : '';
     const isAuto    = s.sync_source === 'auto';
     const isSyncing = _autoSyncing && s.sync_offset == null && !s.auto_sync_failed;
+    const laps = _lapDetails[s.csv_path] || [];
+    const defaultRefLap = (laps.find(l => !l.is_outlap)?.lap_num) || (laps[0]?.lap_num) || 1;
+    const savedRefLap = Number(_config?.session_info?.[s.csv_path]?.sync_ref_lap_num || defaultRefLap);
+    const lapOptions = laps.map((lap, idx) => {
+      const lapNum = Number(lap.lap_num ?? (idx + 1));
+      const sel = lapNum === savedRefLap ? 'selected' : '';
+      return `<option value="${lapNum}" ${sel}>第 ${lapNum} 圈</option>`;
+    }).join('');
     const autoNote  = isSyncing
       ? `<div style="font-size:9px;color:#ffb74d;margin-bottom:6px;padding:5px 6px;
                      background:rgba(255,183,77,0.08);border-radius:4px;border-left:2px solid #ffb74d">
@@ -302,7 +310,8 @@ ${renderLapTagCard(s)}
   </div>
   <input type="range" id="sv-scrub" class="sync-scrub" min="0" max="1000" value="0" step="1">
   <div class="sync-mark-row">
-    <button class="btn btn-ok btn-sm" id="sv-mark">${isAuto ? '✓ 确认第1圈起点' : '🏁 标记第1圈起点'}</button>
+    <button class="btn btn-ok btn-sm" id="sv-mark">${isAuto ? '✓ 确认对齐圈起点' : '🏁 标记对齐圈起点'}</button>
+    ${lapOptions ? `<select id="sv-ref-lap" class="input-field input-narrow sync-off-input" title="选择按哪一圈对齐">${lapOptions}</select>` : ''}
     <input type="number" id="sv-off-input" class="input-field input-narrow sync-off-input"
            step="0.001" value="${esc(offVal)}" placeholder="0.000" title="Current offset (s) — follows video position">
     <span class="sync-mark-val" id="sv-mark-val">${off!=null && !isAuto ? '✓ saved' : ''}</span>
@@ -316,25 +325,27 @@ ${renderLapTagCard(s)}
     if (!laps.length) return '';
     return `
 <div class="dr-card">
-  <div class="dr-card-title">圈标签（手动）</div>
-  <div class="dr-hint" style="margin-bottom:6px">默认首圈为 outlap、末圈为 inlap，可在这里手动设置。</div>
-  <div style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:6px">
-    ${laps.map((lap, idx) => `
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 2px;border-bottom:${idx===laps.length-1?'none':'1px solid var(--line)'}">
-        <span style="font-size:10px;color:var(--text2)">Lap ${lap.lap_num ?? (idx + 1)}</span>
-        <div style="display:flex;gap:10px;align-items:center">
-          <label style="font-size:10px;display:flex;gap:4px;align-items:center">
-            <input type="checkbox" class="lap-tag-toggle" data-lap-num="${lap.lap_num}" data-tag="outlap" ${lap.is_outlap ? 'checked' : ''}>
-            outlap
-          </label>
-          <label style="font-size:10px;display:flex;gap:4px;align-items:center">
-            <input type="checkbox" class="lap-tag-toggle" data-lap-num="${lap.lap_num}" data-tag="inlap" ${lap.is_inlap ? 'checked' : ''}>
-            inlap
-          </label>
+  <details style="width:100%">
+    <summary class="dr-card-title" style="cursor:pointer;user-select:none">圈标签（手动）</summary>
+    <div class="dr-hint" style="margin:6px 0 6px 0">默认首圈为 outlap、末圈为 inlap，可在这里手动设置。</div>
+    <div style="max-height:120px;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:6px">
+      ${laps.map((lap, idx) => `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 2px;border-bottom:${idx===laps.length-1?'none':'1px solid var(--line)'}">
+          <span style="font-size:10px;color:var(--text2)">Lap ${lap.lap_num ?? (idx + 1)}</span>
+          <div style="display:flex;gap:10px;align-items:center">
+            <label style="font-size:10px;display:flex;gap:4px;align-items:center">
+              <input type="checkbox" class="lap-tag-toggle" data-lap-num="${lap.lap_num}" data-tag="outlap" ${lap.is_outlap ? 'checked' : ''}>
+              outlap
+            </label>
+            <label style="font-size:10px;display:flex;gap:4px;align-items:center">
+              <input type="checkbox" class="lap-tag-toggle" data-lap-num="${lap.lap_num}" data-tag="inlap" ${lap.is_inlap ? 'checked' : ''}>
+              inlap
+            </label>
+          </div>
         </div>
-      </div>
-    `).join('')}
-  </div>
+      `).join('')}
+    </div>
+  </details>
 </div>`;
   }
 
@@ -555,18 +566,22 @@ ${renderLapTagCard(s)}
     const timeEl = pane.querySelector('#sv-time');
     const markEl = pane.querySelector('#sv-mark-val');
     const offInp = pane.querySelector('#sv-off-input');
+    const refLapSel = pane.querySelector('#sv-ref-lap');
 
     if (!video) return;
 
     let fps = 30; // default; will be updated from metadata
 
-    // outlapDur: elapsed_start of the first timed lap (already cached from loadLaps).
-    // sync_offset = (video time at lap-1 mark) - outlapDur, matching video_renderer.py
+    // sync_offset = (video time at selected reference lap mark) - lap_elapsed_start
     // semantics where sync_offset = video time at session start.
-    function getOutlapDur() {
+    function getRefLapElapsed() {
       const laps = _lapDetails[s.csv_path] || [];
+      if (!laps.length) return 0;
+      const refLapNum = Number(refLapSel?.value || _config?.session_info?.[s.csv_path]?.sync_ref_lap_num || 0);
+      const picked = laps.find(l => Number(l.lap_num) === refLapNum);
+      if (picked) return picked.elapsed_start || 0;
       const firstTimed = laps.find(l => !l.is_outlap);
-      return (firstTimed?.elapsed_start) || 0;
+      return (firstTimed?.elapsed_start) || (laps[0]?.elapsed_start) || 0;
     }
 
     function fmtVTime(t) {
@@ -577,26 +592,35 @@ ${renderLapTagCard(s)}
 
     let _sought = false; // guard: seek once per wireVideoSync call
 
-    function seekToLap1() {
+    function seekToRefLap() {
       if (s.sync_offset == null || !video.duration) return;
-      const outlapDur = getOutlapDur();
-      const lap1Vid = Math.max(0, Math.min(video.duration, s.sync_offset + outlapDur));
+      const refElapsed = getRefLapElapsed();
+      const refVid = Math.max(0, Math.min(video.duration, s.sync_offset + refElapsed));
       _sought = true;
       if (scrub) scrub.max = Math.round(video.duration * 1000);
-      video.currentTime = lap1Vid;
-      if (scrub) scrub.value = Math.round(lap1Vid * 1000);
-      if (timeEl) timeEl.textContent = fmtVTime(lap1Vid);
-      if (offInp) offInp.value = lap1Vid.toFixed(3);
+      video.currentTime = refVid;
+      if (scrub) scrub.value = Math.round(refVid * 1000);
+      if (timeEl) timeEl.textContent = fmtVTime(refVid);
+      if (offInp) offInp.value = refVid.toFixed(3);
     }
 
     video.addEventListener('loadedmetadata', () => {
       scrub.max = Math.round(video.duration * 1000);
       fps = 30;
-      if (!_sought) seekToLap1();
+      if (!_sought) seekToRefLap();
     });
 
     // Fallback: canplay fires later than loadedmetadata and is more reliable in some WebView builds
-    video.addEventListener('canplay', () => { if (!_sought) seekToLap1(); }, { once: true });
+    video.addEventListener('canplay', () => { if (!_sought) seekToRefLap(); }, { once: true });
+
+    refLapSel?.addEventListener('change', async () => {
+      const n = Number(refLapSel.value || 0);
+      const existing = _config?.session_info?.[s.csv_path] || {};
+      await API.editSessionInfo(s.csv_path, { ...existing, sync_ref_lap_num: n });
+      if (!_config.session_info) _config.session_info = {};
+      _config.session_info[s.csv_path] = { ...existing, sync_ref_lap_num: n };
+      seekToRefLap();
+    });
 
     video.addEventListener('timeupdate', () => {
       if (!video.seeking) {
@@ -623,12 +647,11 @@ ${renderLapTagCard(s)}
     pane.querySelector('#sv-p')?.addEventListener ('click', () => step(1));
     pane.querySelector('#sv-pp')?.addEventListener('click', () => step(fps));
 
-    // Mark: save (video.currentTime - outlapDur) as sync_offset.
-    // vid_t = sync_offset + lap.elapsed_start works correctly for all laps.
+    // Mark selected reference lap and derive session-start sync_offset.
     pane.querySelector('#sv-mark')?.addEventListener('click', async () => {
       const rawTime   = video.currentTime;
-      const outlapDur = getOutlapDur();
-      const offset    = rawTime - outlapDur;
+      const refElapsed = getRefLapElapsed();
+      const offset    = rawTime - refElapsed;
       s.sync_offset = offset;
       s.sync_source = 'user';
       await saveOffset(s);
@@ -638,7 +661,7 @@ ${renderLapTagCard(s)}
 
     // If metadata already available (e.g. browser cache), seek immediately.
     if (video.readyState >= 1 && s.sync_offset != null) {
-      seekToLap1();
+      seekToRefLap();
     } else if (video.readyState < 1) {
       // Force load in case preload="metadata" was suppressed (WebView2 cache behaviour)
       video.load();
@@ -655,18 +678,20 @@ ${renderLapTagCard(s)}
     const pane = _container?.querySelector('#data-right');
     const vid  = pane?.querySelector('#sync-video');
     if (!vid || vid.readyState < 1 || !vid.duration) return;
-    const laps       = _lapDetails[s.csv_path] || [];
-    const firstTimed = laps.find(l => !l.is_outlap);
-    const outlapDur  = firstTimed?.elapsed_start || 0;
-    const lap1Vid    = Math.max(0, Math.min(vid.duration, syncOffset + outlapDur));
+    const laps = _lapDetails[s.csv_path] || [];
+    const refLapNum = Number(_config?.session_info?.[s.csv_path]?.sync_ref_lap_num || 0);
+    const picked = laps.find(l => Number(l.lap_num) === refLapNum);
+    const fallback = laps.find(l => !l.is_outlap) || laps[0];
+    const refElapsed = (picked?.elapsed_start ?? fallback?.elapsed_start ?? 0);
+    const refVid = Math.max(0, Math.min(vid.duration, syncOffset + refElapsed));
     const scrub  = pane.querySelector('#sv-scrub');
     const timeEl = pane.querySelector('#sv-time');
     const offInp = pane.querySelector('#sv-off-input');
     if (scrub) scrub.max = Math.round(vid.duration * 1000);
-    vid.currentTime = lap1Vid;
-    if (scrub) scrub.value = Math.round(lap1Vid * 1000);
-    if (timeEl) timeEl.textContent = `${Math.floor(lap1Vid / 60)}:${(lap1Vid % 60).toFixed(3).padStart(6, '0')}`;
-    if (offInp) offInp.value = lap1Vid.toFixed(3);
+    vid.currentTime = refVid;
+    if (scrub) scrub.value = Math.round(refVid * 1000);
+    if (timeEl) timeEl.textContent = `${Math.floor(refVid / 60)}:${(refVid % 60).toFixed(3).padStart(6, '0')}`;
+    if (offInp) offInp.value = refVid.toFixed(3);
   }
 
   async function saveOffset(s) {
@@ -792,7 +817,7 @@ ${renderLapTagCard(s)}
       State.set('sessions', _sessions);
       _metaQueue = []; // reset queue so new sessions get fetched
       renderLeft();
-      setStatus(`已找到 ${_sessions.length} 个会话。`);
+      setStatus(`已找到 ${_sessions.length} 节。`);
       enrichMeta(_sessions);
       // Persist the full merged list so next startup shows cached results immediately
       API.saveSessionsCache(_sessions).catch(() => {});
@@ -802,7 +827,7 @@ ${renderLapTagCard(s)}
         API.startAutoSync(candidates).then(r => {
           if (r?.queued > 0) {
             _autoSyncing = true;
-            setStatus(`已找到 ${_sessions.length} 个会话，正在自动同步 ${r.queued} 个会话…`);
+            setStatus(`已找到 ${_sessions.length} 节，正在自动同步 ${r.queued} 节…`);
           }
         }).catch(() => {});
       }
@@ -814,34 +839,221 @@ ${renderLapTagCard(s)}
     _container?.querySelector('#scan-btn')?.removeAttribute('disabled');
   }
 
+  function _extractDroppedPaths(evt) {
+    const dt = evt?.dataTransfer;
+    if (!dt) return [];
+    const out = [];
+    // Prefer FileList first
+    if (dt.files && dt.files.length) {
+      for (const f of dt.files) {
+        const p = f.path || '';
+        if (p) out.push(p);
+      }
+    }
+    // Fallback: uri-list / text payload
+    const uri = dt.getData && (dt.getData('text/uri-list') || dt.getData('text/plain'));
+    if (uri) {
+      uri.split(/\r?\n/).map(s => s.trim()).filter(Boolean).forEach(x => out.push(x));
+    }
+    return [...new Set(out)];
+  }
+
+  function _bindDropImport(container) {
+    const overlay = container.querySelector('#drop-import-overlay');
+    if (!overlay) return;
+    let dragDepth = 0;
+
+    const show = () => { overlay.style.display = 'flex'; };
+    const hide = () => { overlay.style.display = 'none'; };
+
+    container.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      dragDepth++;
+      show();
+    });
+    container.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      show();
+    });
+    container.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) hide();
+    });
+    container.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      dragDepth = 0;
+      hide();
+      const paths = _extractDroppedPaths(e);
+      if (!paths.length) {
+        setStatus('未读取到可用拖拽路径，请重试。');
+        return;
+      }
+      try {
+        setStatus('正在导入拖拽路径…');
+        const res = await API.importDroppedPaths(paths, _selCsv || '');
+        if (!res?.ok) {
+          setStatus(res?.message || '拖拽导入失败。');
+          return;
+        }
+        _config = await API.getConfig();
+        setStatus('导入成功，正在重扫…');
+        await doScan(true);
+      } catch (err) {
+        setStatus('拖拽导入失败：' + String(err));
+      }
+    });
+  }
+
   async function runAutoLapSplitFromJson() {
     try {
-      setStatus('请选择赛道 JSON（包含起终线）…');
-      const jsonPath = await API.openFileDialog(['赛道 JSON (*.json)']);
-      if (!jsonPath) return;
+      if (!_selCsv) {
+        setStatus('请先在左侧选中一节（.gpx/.vbo）再执行切圈。');
+        return;
+      }
+      const lower = String(_selCsv).toLowerCase();
+      if (!(lower.endsWith('.gpx') || lower.endsWith('.vbo'))) {
+        setStatus('当前节次不是 .gpx/.vbo，暂不支持自动切圈。');
+        return;
+      }
 
-      setStatus('请选择待切圈数据目录（gpx/vbo）…');
-      const inputDir = await API.openFolderDialog();
-      if (!inputDir) return;
-
-      setStatus('请选择输出目录…');
-      const outputDir = await API.openFolderDialog();
-      if (!outputDir) return;
+      let jsonPath = '';
+      const tracks = await API.listTrackJsons().catch(() => []);
+      if (tracks && tracks.length > 0) {
+        const selected = await chooseTrackJsonDialog(tracks);
+        if (!selected) return;
+        setStatus(`已选择赛道：${selected.display_name || selected.name}`);
+        jsonPath = selected.path;
+        // Persist selected track to current session so right-panel "赛道" auto-fills.
+        const s = _sessions.find(x => x.csv_path === _selCsv);
+        if (s) {
+          const pickedTrackName = (selected.display_name || selected.name || '').trim();
+          if (pickedTrackName) {
+            const existing = _config?.session_info?.[_selCsv] || {};
+            await API.editSessionInfo(_selCsv, { ...existing, info_track: pickedTrackName });
+            if (!_config.session_info) _config.session_info = {};
+            _config.session_info[_selCsv] = { ...existing, info_track: pickedTrackName };
+          }
+        }
+      } else {
+        setStatus('tracks 目录未发现赛道 JSON，改为手动选择…');
+        jsonPath = await API.openFileDialog(['赛道 JSON (*.json)']);
+        if (!jsonPath) return;
+      }
 
       const btn = _container?.querySelector('#lap-split-btn');
       if (btn) btn.setAttribute('disabled', '');
-      setStatus('正在按赛道起终线切圈…');
+      setStatus('正在对当前选中节次执行切圈…');
 
-      const res = await API.autoSplitLapsFromJson(jsonPath, inputDir, outputDir);
+      const res = await API.autoSplitLapForFile(jsonPath, _selCsv);
       const n = (res?.processed || []).length;
       const k = (res?.skipped || []).length;
-      setStatus(`切圈完成：${n} 个成功，${k} 个跳过。正在重扫…`);
-      await doScan(true);
+      setStatus(`切圈完成：${n} 个成功，${k} 个跳过。正在刷新当前节次…`);
+
+      const selectedCsv = _selCsv;
+      const s = _sessions.find(x => x.csv_path === selectedCsv);
+      if (s) {
+        delete _meta[selectedCsv];
+        delete _lapDetails[selectedCsv];
+        await enrichMeta([s]);
+        await loadLaps(s);
+        // Keep current selection and video/sync context; only refresh current detail.
+        if (_selCsv === selectedCsv) renderRight();
+      }
+      setStatus(`切圈完成：${n} 个成功，${k} 个跳过。`);
     } catch (e) {
       setStatus('切圈失败：' + String(e));
     } finally {
       _container?.querySelector('#lap-split-btn')?.removeAttribute('disabled');
     }
+  }
+
+  function chooseTrackJsonDialog(tracks) {
+    return new Promise((resolve) => {
+      const mask = document.createElement('div');
+      mask.style.position = 'fixed';
+      mask.style.inset = '0';
+      mask.style.background = 'rgba(0,0,0,0.45)';
+      mask.style.display = 'flex';
+      mask.style.alignItems = 'center';
+      mask.style.justifyContent = 'center';
+      mask.style.zIndex = '9999';
+
+      const box = document.createElement('div');
+      box.style.minWidth = '420px';
+      box.style.maxWidth = '70vw';
+      box.style.background = '#1f1f1f';
+      box.style.border = '1px solid #3a3a3a';
+      box.style.borderRadius = '10px';
+      box.style.padding = '16px';
+      box.style.boxShadow = '0 8px 28px rgba(0,0,0,0.35)';
+
+      const title = document.createElement('div');
+      title.textContent = '选择赛道';
+      title.style.fontSize = '16px';
+      title.style.fontWeight = '600';
+      title.style.marginBottom = '8px';
+      title.style.color = '#f0f0f0';
+
+      const desc = document.createElement('div');
+      desc.textContent = '请选择当前节次对应赛道：';
+      desc.style.fontSize = '13px';
+      desc.style.color = '#c9c9c9';
+      desc.style.marginBottom = '10px';
+
+      const sel = document.createElement('select');
+      sel.style.width = '100%';
+      sel.style.padding = '8px';
+      sel.style.borderRadius = '6px';
+      sel.style.border = '1px solid #4a4a4a';
+      sel.style.background = '#111';
+      sel.style.color = '#eee';
+      tracks.forEach((t, i) => {
+        const opt = document.createElement('option');
+        opt.value = String(i);
+        opt.textContent = t.display_name || t.name || `赛道 ${i + 1}`;
+        sel.appendChild(opt);
+      });
+
+      const actions = document.createElement('div');
+      actions.style.display = 'flex';
+      actions.style.justifyContent = 'flex-end';
+      actions.style.gap = '8px';
+      actions.style.marginTop = '14px';
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.textContent = '取消';
+      cancelBtn.className = 'btn secondary';
+
+      const okBtn = document.createElement('button');
+      okBtn.textContent = '确定';
+      okBtn.className = 'btn';
+
+      function cleanup(value) {
+        if (mask.parentNode) mask.parentNode.removeChild(mask);
+        resolve(value);
+      }
+
+      cancelBtn.addEventListener('click', () => cleanup(null));
+      okBtn.addEventListener('click', () => {
+        const idx = Math.max(0, Math.min(tracks.length - 1, parseInt(sel.value, 10) || 0));
+        cleanup(tracks[idx]);
+      });
+      mask.addEventListener('click', (e) => {
+        if (e.target === mask) cleanup(null);
+      });
+
+      actions.appendChild(cancelBtn);
+      actions.appendChild(okBtn);
+      box.appendChild(title);
+      box.appendChild(desc);
+      box.appendChild(sel);
+      box.appendChild(actions);
+      mask.appendChild(box);
+      document.body.appendChild(mask);
+      sel.focus();
+    });
   }
 
   async function launchManualLapSplitGui() {
@@ -932,6 +1144,11 @@ ${renderLapTagCard(s)}
 
     container.innerHTML = `
 <div class="page data-page">
+  <div id="drop-import-overlay" style="display:none;position:absolute;inset:0;z-index:1000;background:rgba(0,0,0,.45);align-items:center;justify-content:center;border:2px dashed var(--acc);pointer-events:none">
+    <div style="padding:14px 18px;border-radius:10px;background:var(--bg2);color:var(--text1);font-size:12px">
+      拖入遥测文件/文件夹或视频文件/文件夹即可导入
+    </div>
+  </div>
   <div class="toolbar">
     <div class="toolbar-left">
       <span class="page-title">Data</span>
@@ -997,6 +1214,7 @@ ${renderLapTagCard(s)}
     });
     container.addEventListener('click', () => closeLapSplitMenu());
     initResizer(container);
+    _bindDropImport(container);
 
     // XRK auto-conversion progress from the backend
     _unlistenFns.push(API.on('scan_status', detail => {

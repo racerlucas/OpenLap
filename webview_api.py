@@ -96,7 +96,9 @@ class _VideoFileHandler(http.server.BaseHTTPRequestHandler):
                         break
                     self.wfile.write(chunk)
                     remaining -= len(chunk)
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+            # Browser/video element may cancel range requests aggressively during
+            # seek/tab switch; treat these socket aborts as normal.
             pass
 
     def log_message(self, *args):
@@ -1115,16 +1117,143 @@ class WebviewAPI:
         si['_video_override'] = str(Path(video_path).resolve())
         self._config.save()
 
+    def import_dropped_paths(self, paths: list, selected_csv_path: str = '') -> dict:
+        """Handle drag-and-drop import for telemetry/video files or folders."""
+        import os
+        import re
+        from pathlib import Path as _Path
+
+        def _norm(p: str) -> str:
+            p = (p or '').strip().strip('"').strip("'")
+            if p.startswith('file:///'):
+                p = p.replace('file:///', '', 1)
+            p = p.replace('/', os.sep)
+            # Decode simple URL-escaped spaces often found in uri-list drops
+            p = p.replace('%20', ' ')
+            return str(_Path(p).resolve())
+
+        if not isinstance(paths, list) or not paths:
+            return {'ok': False, 'message': 'No dropped paths received.'}
+
+        video_ext = {'.mp4', '.mov', '.avi', '.mkv', '.m4v', '.mts', '.wmv'}
+        telemetry_ext = {'.csv', '.gpx', '.ld', '.vbo', '.xrk', '.xrz', '.drk'}
+
+        imported = []
+        updated_cfg = {}
+        selected_csv = _norm(selected_csv_path) if selected_csv_path else ''
+
+        for raw in paths:
+            p = _norm(str(raw))
+            if not p or not os.path.exists(p):
+                continue
+
+            if os.path.isdir(p):
+                # Folders: best-effort classification by quick extension scan
+                has_vid = False
+                has_tel = False
+                for root, _, files in os.walk(p):
+                    for fn in files:
+                        ext = os.path.splitext(fn)[1].lower()
+                        if ext in video_ext:
+                            has_vid = True
+                        if ext in telemetry_ext:
+                            has_tel = True
+                    if has_vid and has_tel:
+                        break
+                if has_vid:
+                    updated_cfg['video_path'] = p
+                    imported.append(f'video folder: {p}')
+                if has_tel:
+                    # Keep backward-compatible catch-all path for mixed telemetry drops
+                    updated_cfg['telemetry_path'] = p
+                    imported.append(f'telemetry folder: {p}')
+                continue
+
+            ext = os.path.splitext(p)[1].lower()
+            parent = str(_Path(p).parent)
+
+            if ext in video_ext:
+                if selected_csv:
+                    abs_csv = os.path.abspath(selected_csv)
+                    si = self._config.session_info.setdefault(abs_csv, {})
+                    si['_video_override'] = p
+                    imported.append(f'video assigned to session: {os.path.basename(p)}')
+                else:
+                    updated_cfg['video_path'] = parent
+                    imported.append(f'video file folder set: {parent}')
+                continue
+
+            if ext in telemetry_ext:
+                if ext == '.gpx':
+                    updated_cfg['gpx_path'] = parent
+                elif ext == '.vbo':
+                    updated_cfg['vbox_path'] = parent
+                elif ext == '.ld':
+                    updated_cfg['motec_path'] = parent
+                elif ext in ('.xrk', '.xrz', '.drk'):
+                    updated_cfg['aim_path'] = parent
+                else:
+                    # CSV can be RaceBox or AIM-converted; keep generic bucket.
+                    updated_cfg['telemetry_path'] = parent
+                imported.append(f'telemetry file folder set: {parent}')
+                continue
+
+        if updated_cfg:
+            self.save_config(updated_cfg)
+        else:
+            # Still save if we assigned a video override above.
+            self._config.save()
+
+        if not imported:
+            return {'ok': False, 'message': 'No supported telemetry/video files found in drop.'}
+        return {'ok': True, 'message': '; '.join(imported), 'updated': updated_cfg}
+
     # ── Custom lap split tools ────────────────────────────────────────────────
     def auto_split_laps_from_json(self, json_path: str, input_dir: str, output_dir: str) -> dict:
         """Batch split .gpx/.vbo laps using start line from a track JSON file."""
         from lap_split_tools import auto_split_folder_with_track_json
         return auto_split_folder_with_track_json(json_path, input_dir, output_dir)
 
+    def auto_split_lap_for_file(self, json_path: str, telemetry_path: str) -> dict:
+        """Split laps for a selected .gpx/.vbo file in place."""
+        from lap_split_tools import auto_split_file_with_track_json
+        return auto_split_file_with_track_json(json_path, telemetry_path)
+
     def launch_manual_lap_split_gui(self) -> dict:
         """Launch test_data_process/gui_split.py in a separate process."""
         from lap_split_tools import launch_gui_split
         return launch_gui_split()
+
+    def list_track_jsons(self) -> list:
+        """List track JSON files from repository-local tracks/ directory."""
+        import json
+        base = Path(__file__).resolve().parent / 'tracks'
+        if not base.exists():
+            return []
+        items = []
+        for p in sorted(base.glob('*.json')):
+            if p.name.endswith('.template.json'):
+                continue
+            display_name = p.stem
+            try:
+                with open(p, 'r', encoding='utf-8') as f:
+                    cfg = json.load(f)
+                md = cfg.get('metadata', {}) or {}
+                display_name = (
+                    md.get('名称')
+                    or md.get('name')
+                    or md.get('Name')
+                    or p.stem
+                )
+            except Exception:
+                # Fallback to filename stem when metadata parsing fails.
+                display_name = p.stem
+            items.append({
+                'name': p.stem,
+                'display_name': str(display_name),
+                'path': str(p.resolve()),
+            })
+        return items
 
     # ── RaceBox session download ──────────────────────────────────────────────
     def download_racebox_sessions(self) -> None:

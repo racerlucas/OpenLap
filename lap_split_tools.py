@@ -9,7 +9,7 @@ from typing import Dict
 
 def _load_lap_utils():
     here = Path(__file__).resolve().parent
-    lap_utils_path = here / "test_data_process" / "lap_utils.py"
+    lap_utils_path = here / "lap_split_tools" / "lap_utils.py"
     if not lap_utils_path.exists():
         raise FileNotFoundError(f"lap_utils.py not found: {lap_utils_path}")
 
@@ -90,12 +90,50 @@ def auto_split_folder_with_track_json(
     }
 
 
+def auto_split_file_with_track_json(
+    json_path: str,
+    input_file: str,
+    output_file: str | None = None,
+) -> dict:
+    lap_utils = _load_lap_utils()
+    line_cfg = _line_from_track_json(json_path)
+    start_line = line_cfg["line"]
+    direction = line_cfg["direction"]
+
+    src = Path(input_file).resolve()
+    if not src.exists() or not src.is_file():
+        raise FileNotFoundError(f"Input file not found: {src}")
+    ext = src.suffix.lower()
+    if ext not in {".gpx", ".vbo"}:
+        raise ValueError("Only .gpx/.vbo files support lap splitting")
+
+    dst = Path(output_file).resolve() if output_file else src
+
+    if ext == ".gpx":
+        points, tree, ns = lap_utils.load_gpx(str(src))
+        points = lap_utils.split_into_laps(points, start_line["p1"], start_line["p2"], direction)
+        lap_utils.save_gpx(str(dst), tree, points, ns)
+    else:
+        points, column_names, header_lines = lap_utils.load_vbo(str(src))
+        points = lap_utils.split_into_laps(points, start_line["p1"], start_line["p2"], direction)
+        lap_utils.save_vbo(str(dst), points, column_names, header_lines)
+
+    return {
+        "processed": [str(dst)],
+        "skipped": [],
+        "json_path": str(Path(json_path).resolve()),
+        "input_file": str(src),
+        "output_file": str(dst),
+        "direction": direction,
+    }
+
+
 def launch_gui_split() -> dict:
     import subprocess
     import sys
 
     here = Path(__file__).resolve().parent
-    gui_path = here / "test_data_process" / "gui_split.py"
+    gui_path = here / "lap_split_tools" / "gui_split.py"
     if not gui_path.exists():
         raise FileNotFoundError(f"gui_split.py not found: {gui_path}")
 

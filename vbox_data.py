@@ -98,12 +98,18 @@ def _parse_hhmmss(raw: float) -> Tuple[int, int, float]:
 
 def load_vbo(path: str) -> Session:
     sections = _parse_sections(path)
+    header_lines = [c.strip().lower() for c in sections.get('header', []) if c.strip()]
 
-    header_lines = sections.get('header', [])
-    if not header_lines:
-        raise ValueError(f"No [header] section in {path}")
-
-    channels = [c.strip().lower() for c in header_lines]
+    # Prefer explicit data columns when available. Some VBO variants keep
+    # telemetry channels in [header] but store true row schema in [column names].
+    # If we only parse [header], channels like "lap" may be missed.
+    column_name_lines = sections.get('column names', [])
+    if column_name_lines:
+        channels = [c.strip().lower() for c in column_name_lines[0].split() if c.strip()]
+    else:
+        if not header_lines:
+            raise ValueError(f"No [header] section in {path}")
+        channels = header_lines
 
     unit_lines = [u.strip().lower() for u in sections.get('channel units', [])]
     units: Dict[str, str] = dict(zip(channels, unit_lines)) if unit_lines else {}
@@ -118,8 +124,8 @@ def load_vbo(path: str) -> Session:
         return None
 
     idx_time    = _find('time')
-    idx_lat     = _find('latitude north', 'latitude south', 'latitude')
-    idx_lon     = _find('longitude east', 'longitude west', 'longitude')
+    idx_lat     = _find('latitude north', 'latitude south', 'latitude', 'lat')
+    idx_lon     = _find('longitude east', 'longitude west', 'longitude', 'long', 'lon')
     idx_speed   = _find('velocity kmh', 'velocity mph', 'velocity', 'speed')
     idx_height  = _find('height', 'altitude')
     idx_lat_g   = _find('lateral-acc', 'lateral acc', 'ay')
@@ -150,11 +156,14 @@ def load_vbo(path: str) -> Session:
     # Speed conversion factor
     speed_ch = channels[idx_speed] if idx_speed is not None else ''
     speed_unit = units.get(speed_ch, '')
-    if 'kmh' in speed_ch or 'km/h' in speed_unit or 'kph' in speed_unit:
+    speed_hint = header_lines[idx_speed] if idx_speed is not None and idx_speed < len(header_lines) else ''
+    speed_unit_by_idx = unit_lines[idx_speed] if idx_speed is not None and idx_speed < len(unit_lines) else ''
+    speed_ctx = ' '.join([speed_ch, speed_unit, speed_hint, speed_unit_by_idx]).lower()
+    if 'kmh' in speed_ctx or 'km/h' in speed_ctx or 'kph' in speed_ctx:
         speed_factor = 1.0
-    elif 'mph' in speed_ch or 'mph' in speed_unit:
+    elif 'mph' in speed_ctx:
         speed_factor = 1.60934
-    elif 'm/s' in speed_unit:
+    elif 'm/s' in speed_ctx:
         speed_factor = 3.6
     else:
         speed_factor = 1.852  # bare 'velocity' → knots
