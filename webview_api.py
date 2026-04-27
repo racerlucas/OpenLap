@@ -268,14 +268,23 @@ class WebviewAPI:
         result = []
         for m in matches:
             csv = m.csv_path
+            abs_csv = str(Path(csv).resolve())
+            si = self._config.session_info.get(abs_csv, {}) if isinstance(self._config.session_info, dict) else {}
+            video_override = si.get('_video_override')
+            if video_override and os.path.isfile(video_override):
+                video_paths = [video_override]
+                matched = True
+            else:
+                video_paths = m.video_group.paths if m.video_group else []
+                matched = m.matched
             result.append({
                 'csv_path':         csv,
                 'source':           m.source,
                 'csv_start':        m.csv_start.isoformat() if m.csv_start else None,
-                'matched':          m.matched,
+                'matched':          matched,
                 'needs_conversion': m.needs_conversion,
                 'xrk_path':        m.xrk_path,
-                'video_paths':     m.video_group.paths if m.video_group else [],
+                'video_paths':     video_paths,
                 'sync_offset':     offsets.get(csv),
                 'sync_source':     offset_sources.get(csv),
                 'auto_sync_failed': csv in auto_failed,
@@ -315,14 +324,24 @@ class WebviewAPI:
         result = []
         for s in sessions:
             csv = s.get('csv_path', '')
+            abs_csv = str(Path(csv).resolve()) if csv else ''
+            si = self._config.session_info.get(abs_csv, {}) if isinstance(self._config.session_info, dict) else {}
+            video_override = si.get('_video_override')
+            cached_paths = s.get('video_paths', [])
+            if video_override and os.path.isfile(video_override):
+                video_paths = [video_override]
+                matched = True
+            else:
+                video_paths = cached_paths
+                matched = s.get('matched', False)
             result.append({
                 'csv_path':         csv,
                 'source':           s.get('source', 'RaceBox'),
                 'csv_start':        s.get('csv_start'),
-                'matched':          s.get('matched', False),
+                'matched':          matched,
                 'needs_conversion': s.get('needs_conversion', False),
                 'xrk_path':        s.get('xrk_path'),
-                'video_paths':     s.get('video_paths', []),
+                'video_paths':     video_paths,
                 'sync_offset':     offsets.get(csv),
                 'sync_source':     offset_sources.get(csv),
                 'auto_sync_failed': csv in auto_failed,

@@ -129,3 +129,28 @@ class TestThreadSafety:
         assert hasattr(api, '_thread_lock')
         import threading as _t
         assert isinstance(api._thread_lock, type(_t.Lock()))
+
+
+def test_cached_sessions_prefers_manual_video_override(api, tmp_path):
+    csv_path = str((tmp_path / "s.csv").resolve())
+    video_path = str((tmp_path / "manual.mp4").resolve())
+    Path(csv_path).write_text("Date UTC,2026-04-26T12:00:00Z\nRecord,Time,Speed\n", encoding="utf-8")
+    Path(video_path).write_bytes(b"\x00")
+
+    api._config.session_info[str(Path(csv_path).resolve())] = {
+        "_video_override": str(Path(video_path).resolve())
+    }
+
+    fake_cache = {"sessions": [{
+        "csv_path": csv_path,
+        "source": "RaceBox",
+        "matched": False,
+        "video_paths": [],
+    }]}
+    with patch("webview_api.load_scan_cache", return_value=fake_cache):
+        out = api._cached_sessions()
+
+    assert len(out) == 1
+    assert out[0]["matched"] is True
+    assert out[0]["video_paths"] == [str(Path(video_path).resolve())]
+
