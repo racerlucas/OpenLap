@@ -112,6 +112,42 @@ def _resample_points(points: list, n_samples: int) -> tuple[np.ndarray, np.ndarr
     return np.interp(dist_u, cum, lats), np.interp(dist_u, cum, lons)
 
 
+def _fit_centerline_from_laps(resampled_laps: list[tuple[np.ndarray, np.ndarray]]) -> tuple[np.ndarray, np.ndarray]:
+    """Fit a centerline by nearest-point projection onto each lap polyline.
+
+    The first lap acts as the reference polyline. For each reference point, we
+    find the nearest point on every other lap polyline, then average those
+    projected points. This computes an average of *lines* (curves), not merely
+    average of same-index sample points.
+    """
+    if not resampled_laps:
+        return np.array([]), np.array([])
+    if len(resampled_laps) == 1:
+        return resampled_laps[0]
+
+    ref_lat, ref_lon = resampled_laps[0]
+    n = len(ref_lat)
+    if n < 2:
+        return ref_lat, ref_lon
+
+    lat_contrib = [np.array(ref_lat, dtype=float)]
+    lon_contrib = [np.array(ref_lon, dtype=float)]
+
+    for lap_lat, lap_lon in resampled_laps[1:]:
+        if len(lap_lat) < 2:
+            continue
+        # (n, m) squared distances between ref points and one lap polyline.
+        d2 = (ref_lat[:, None] - lap_lat[None, :]) ** 2 + (ref_lon[:, None] - lap_lon[None, :]) ** 2
+        nn_idx = np.argmin(d2, axis=1)
+        lat_contrib.append(lap_lat[nn_idx])
+        lon_contrib.append(lap_lon[nn_idx])
+
+    # Robust centerline: median across per-lap projected points.
+    lat_stack = np.stack(lat_contrib, axis=0)
+    lon_stack = np.stack(lon_contrib, axis=0)
+    return np.median(lat_stack, axis=0), np.median(lon_stack, axis=0)
+
+
 def build_complete_map_track(laps: Iterable, max_points: int = 600,
                              smooth_window: int = 1,
                              timed_samples: int = 240) -> tuple[list[float], list[float]]:
@@ -131,16 +167,26 @@ def build_complete_map_track(laps: Iterable, max_points: int = 600,
     merged_points: list[dict] = []
 
     if timed_laps:
-        lat_sets = []
-        lon_sets = []
+        resampled_laps: list[tuple[np.ndarray, np.ndarray]] = []
+        ref_lat = None
+        ref_lon = None
         for lap in timed_laps:
             rs_lat, rs_lon = _resample_points(list(getattr(lap, 'points', []) or []), timed_samples)
             if len(rs_lat) >= 2 and len(rs_lon) >= 2:
-                lat_sets.append(rs_lat)
-                lon_sets.append(rs_lon)
-        if lat_sets and lon_sets:
-            avg_lats = np.mean(np.stack(lat_sets, axis=0), axis=0)
-            avg_lons = np.mean(np.stack(lon_sets, axis=0), axis=0)
+                if ref_lat is None:
+                    ref_lat, ref_lon = rs_lat, rs_lon
+                    resampled_laps.append((rs_lat, rs_lon))
+                else:
+                    # Align each lap to reference start phase for stability, then
+                    # perform line-based center fitting via nearest projections.
+                    d2_start = (rs_lat - ref_lat[0]) ** 2 + (rs_lon - ref_lon[0]) ** 2
+                    k = int(np.argmin(d2_start))
+                    if k > 0:
+                        rs_lat = np.roll(rs_lat, -k)
+                        rs_lon = np.roll(rs_lon, -k)
+                    resampled_laps.append((rs_lat, rs_lon))
+        if resampled_laps:
+            avg_lats, avg_lons = _fit_centerline_from_laps(resampled_laps)
             merged_points.extend(
                 {'lat': float(la), 'lon': float(lo)}
                 for la, lo in zip(avg_lats.tolist(), avg_lons.tolist())
