@@ -51,6 +51,11 @@ def compute_lap_profile(lap: Lap) -> Tuple[np.ndarray, np.ndarray]:
     """
     Build parallel arrays of lap_elapsed (s) and cumulative_distance (m) for a lap.
 
+    When :class:`Lap` carries SF crossing metadata (from ``build_laps_from_points``),
+    the profile starts at (0, 0) at the **interpolated start/finish crossing** and
+    ends at the **next crossing** (or last sample for the final lap), so elapsed
+    matches the same lap-duration definition used for lap times.
+
     Returns
     -------
     elapsed_s : shape (n,)  — seconds from lap start
@@ -60,14 +65,47 @@ def compute_lap_profile(lap: Lap) -> Tuple[np.ndarray, np.ndarray]:
     if not pts:
         return np.array([0.0]), np.array([0.0])
 
-    n = len(pts)
-    elapsed = np.array([p.lap_elapsed for p in pts], dtype=float)
-    dist    = np.zeros(n, dtype=float)
+    t0 = getattr(lap, 'crossing_start_elapsed', None)
+    t1 = getattr(lap, 'crossing_end_elapsed', None)
+    ela = getattr(lap, 'sf_entry_lat', None)
+    elo = getattr(lap, 'sf_entry_lon', None)
+    xla = getattr(lap, 'sf_exit_lat', None)
+    xlo = getattr(lap, 'sf_exit_lon', None)
 
+    if t0 is None or ela is None or elo is None:
+        n = len(pts)
+        elapsed = np.array([p.lap_elapsed for p in pts], dtype=float)
+        dist = np.zeros(n, dtype=float)
+        for i in range(1, n):
+            p0, p1 = pts[i - 1], pts[i]
+            dist[i] = dist[i - 1] + _haversine_m(p0.lat, p0.lon, p1.lat, p1.lon)
+        return elapsed, dist
+
+    times: list[float] = [float(t0)]
+    lats: list[float] = [float(ela)]
+    lons: list[float] = [float(elo)]
+    for p in pts:
+        te = float(p.elapsed)
+        if te <= float(t0) + 1e-4:
+            continue
+        times.append(te)
+        lats.append(float(p.lat))
+        lons.append(float(p.lon))
+
+    end_t = float(t1) if t1 is not None else float(pts[-1].elapsed)
+    if xla is not None and xlo is not None and end_t > times[-1] + 1e-4:
+        times.append(end_t)
+        lats.append(float(xla))
+        lons.append(float(xlo))
+
+    n = len(times)
+    if n < 2:
+        return np.array([0.0], dtype=float), np.array([0.0], dtype=float)
+
+    elapsed = np.array([t - float(t0) for t in times], dtype=float)
+    dist = np.zeros(n, dtype=float)
     for i in range(1, n):
-        p0, p1 = pts[i - 1], pts[i]
-        dist[i] = dist[i - 1] + _haversine_m(p0.lat, p0.lon, p1.lat, p1.lon)
-
+        dist[i] = dist[i - 1] + _haversine_m(lats[i - 1], lons[i - 1], lats[i], lons[i])
     return elapsed, dist
 
 

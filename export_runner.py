@@ -240,7 +240,9 @@ def run_export(
         # Allow per-item scope override (set from the Overlay tab)
         item_scope = item.get('scope') or scope
 
-        def _ref_for_lap(lap_num: Optional[int] = None):
+        lap_idx_by_num = {int(getattr(l, 'lap_num', -10**9)): i for i, l in enumerate(sess.laps or [])}
+
+        def _ref_for_lap(lap_num: Optional[int] = None, lap_idx: Optional[int] = None):
             """Return the reference lap for a given lap number (handles session_best_so_far)."""
             if ref_mode == 'session_best_so_far':
                 ref, desc = resolve_reference_lap(
@@ -249,6 +251,7 @@ def run_export(
                     session_info    = session_info,
                     scan_cache      = scan_cache,
                     current_lap_num = lap_num,
+                    current_lap_idx = lap_idx if lap_idx is not None else lap_idx_by_num.get(int(lap_num)) if lap_num is not None else None,
                     load_session_fn = load_any_session,
                 )
                 if ref:
@@ -274,7 +277,7 @@ def run_export(
                     show_telemetry=show_tel, padding=padding,
                     is_bike=is_bike, overlay_layout=layout,
                     progress_cb=scaled_prog, log_cb=log,
-                    reference_lap=_ref_for_lap(lap.lap_num),
+                    reference_lap=_ref_for_lap(lap.lap_num, lap_idx),
                     info_overrides=info_overrides,
                     overlay_only=overlay_only,
                     track_map_geometry=_track_map_geometry,
@@ -296,7 +299,7 @@ def run_export(
                     show_telemetry=show_tel, padding=padding,
                     is_bike=is_bike, overlay_layout=layout,
                     progress_cb=scaled_prog, log_cb=log,
-                    reference_lap=_ref_for_lap(lap.lap_num),
+                    reference_lap=_ref_for_lap(lap.lap_num, lap_idx_by_num.get(int(lap.lap_num))),
                     info_overrides=info_overrides,
                     overlay_only=overlay_only,
                     track_map_geometry=_track_map_geometry,
@@ -320,7 +323,7 @@ def run_export(
                         show_telemetry=show_tel, padding=padding,
                         is_bike=is_bike, overlay_layout=layout,
                         progress_cb=scaled_prog, log_cb=log,
-                        reference_lap=_ref_for_lap(lap.lap_num),
+                        reference_lap=_ref_for_lap(lap.lap_num, lap_idx_by_num.get(int(lap.lap_num))),
                         info_overrides=info_overrides,
                         overlay_only=overlay_only,
                         track_map_geometry=_track_map_geometry,
@@ -363,7 +366,7 @@ def run_export(
                     show_telemetry=show_tel, padding=padding,
                     is_bike=is_bike, overlay_layout=layout,
                     progress_cb=scaled_prog, log_cb=log,
-                    reference_lap=_ref_for_lap(included[0].lap_num),
+                    reference_lap=_ref_for_lap(included[0].lap_num, lap_idx_by_num.get(int(included[0].lap_num))),
                     info_overrides=info_overrides,
                     overlay_only=overlay_only,
                     track_map_geometry=_track_map_geometry,

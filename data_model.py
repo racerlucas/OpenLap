@@ -61,6 +61,14 @@ class Lap:
     duration:  float
     is_outlap: bool = False
     is_inlap:  bool = False
+    # Start/finish crossing (session seconds + WGS84) — same geometry used for
+    # lap duration; enables delta_time.compute_lap_profile to anchor (0,0) at SF.
+    crossing_start_elapsed: Optional[float] = None
+    crossing_end_elapsed: Optional[float] = None
+    sf_entry_lat: Optional[float] = None
+    sf_entry_lon: Optional[float] = None
+    sf_exit_lat: Optional[float] = None
+    sf_exit_lon: Optional[float] = None
 
     @property
     def elapsed_start(self) -> float:
@@ -182,6 +190,19 @@ def estimate_lap_crossing_elapsed(prev_pt: DataPoint, curr_pt: DataPoint) -> flo
     return _clamp(est, lo, hi)
 
 
+def _interp_latlon_at_elapsed(prev_pt: DataPoint, next_pt: DataPoint, t_cross: float) -> tuple[float, float]:
+    """Linear lat/lon at ``t_cross`` between two samples (for SF crossing)."""
+    lo, hi = float(prev_pt.elapsed), float(next_pt.elapsed)
+    if hi <= lo + 1e-12:
+        a = 0.0
+    else:
+        a = (float(t_cross) - lo) / (hi - lo)
+    a = max(0.0, min(1.0, a))
+    la = float(prev_pt.lat) + a * (float(next_pt.lat) - float(prev_pt.lat))
+    ln = float(prev_pt.lon) + a * (float(next_pt.lon) - float(prev_pt.lon))
+    return la, ln
+
+
 def build_laps_from_points(
     all_points: List[DataPoint],
     *,
@@ -216,13 +237,30 @@ def build_laps_from_points(
     for i, lap_num in enumerate(order):
         pts = buckets[lap_num]
         start = starts[lap_num]
+        first_pt = pts[0]
+        prev_idx = max(0, first_idx_by_lap[lap_num] - 1)
+        prev_pt = all_points[prev_idx]
+
+        if i == 0 or prev_pt is first_pt:
+            entry_lat, entry_lon = float(first_pt.lat), float(first_pt.lon)
+        else:
+            entry_lat, entry_lon = _interp_latlon_at_elapsed(prev_pt, first_pt, start)
+
+        if i + 1 < len(order):
+            end = starts[order[i + 1]]
+            last_pt = pts[-1]
+            next_first = buckets[order[i + 1]][0]
+            exit_lat, exit_lon = _interp_latlon_at_elapsed(last_pt, next_first, end)
+        else:
+            end = float(pts[-1].elapsed)
+            exit_lat, exit_lon = float(pts[-1].lat), float(pts[-1].lon)
+
         lap_elapsed_origin = float(pts[0].elapsed)
         for pt in pts:
             # Keep per-lap samples anchored at 0 on the first recorded point.
             # Lap *duration* still uses interpolated crossing boundaries.
             pt.lap_elapsed = max(0.0, float(pt.elapsed) - lap_elapsed_origin)
         if i + 1 < len(order):
-            end = starts[order[i + 1]]
             dur = max(0.0, end - start)
         else:
             dur = max(0.0, float(pts[-1].elapsed) - start)
@@ -231,5 +269,11 @@ def build_laps_from_points(
             points=pts,
             duration=dur,
             is_outlap=(outlap_lap_num is not None and lap_num == outlap_lap_num),
+            crossing_start_elapsed=start,
+            crossing_end_elapsed=end,
+            sf_entry_lat=entry_lat,
+            sf_entry_lon=entry_lon,
+            sf_exit_lat=exit_lat,
+            sf_exit_lon=exit_lon,
         ))
     return laps

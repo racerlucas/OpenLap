@@ -52,7 +52,7 @@
   let _themeNames = ['Dark', 'Light', 'Colorful', 'Monochrome', 'Minimal'];
   let _channelDefaultsMap = {
     info: { selected_fields: ['track','datetime','vehicle','weather','wind'], info_overrides: {}, text_align: 'left' },
-    lap_info: { selected_fields: ['lap','best','current','delta'], text_align: 'split' },
+    lap_info: { selected_fields: ['lap','best','current','delta'], text_align: 'split', best_mode: 'so_far' },
     multi: { multi_channels: ['speed', 'gforce_lat'] },
     image: { image_path: '', opacity: 1.0, fit: 'contain' },
     map: { zoom_radius_m: 150, show_ref: true, map_rotate_deg: 0, map_mirror_x: false, map_mirror_y: false },
@@ -68,10 +68,10 @@
     { value: 'lean',        label: '倾角' },
     { value: 'altitude',    label: '海拔' },
     { value: 'lap_time',    label: '圈速' },
-    { value: 'delta_time',  label: '差值' },
+    { value: 'delta_time',  label: '实时秒差' },
     { value: 'map',         label: '地图' },
-    { value: 'info',        label: '节信息' },
-    { value: 'lap_info',    label: '圈信息' },
+    { value: 'info',        label: '本节信息' },
+    { value: 'lap_info',    label: '单圈信息' },
     { value: 'multi',       label: '多曲线' },
     { value: 'image',       label: '图片 / Logo' },
   ];
@@ -86,7 +86,7 @@
     { value: 'lean',         label: '倾角' },
     { value: 'altitude',     label: '海拔' },
     { value: 'lap_time',     label: '圈速' },
-    { value: 'delta_time',   label: '差值' },
+    { value: 'delta_time',   label: '实时秒差' },
   ];
 
   const GAUGE_COLOURS_LIST = [
@@ -136,6 +136,14 @@
   let _resizeObserver  = null;
   let _trackMapGeometry = null; // {lats, lons} from OSM — loaded async on session change
   let _liveSpeedMax = 300;      // preview speed scale aligned with export rule
+  /** Smoothed GPS for map dot (reduces vertex-snapping jitter vs track polyline). */
+  let _mapSmoothedDot = null;
+  let _mapDotSessionKey = '';
+
+  /** Presets / bad saves may leave `gauges` null or non-array — normalise before any .length / .forEach. */
+  function _ensureLayoutGauges() {
+    if (_layout && !Array.isArray(_layout.gauges)) _layout.gauges = [];
+  }
 
   // Frontend stays display-only: semantic telemetry processing is backend-owned.
 
@@ -192,6 +200,8 @@
         return {
           ...base, lap_num: 3, total_laps: 8,
           lap_elapsed: 45.234, best_so_far: 83.456, delta_time: -0.234,
+          session_best: 82.901,
+          best_mode: gauge?.best_mode || defs.best_mode || 'so_far',
           selected_fields: gauge?.selected_fields || defs.selected_fields || [],
         };
       }
@@ -378,7 +388,28 @@
       const osmOn = gauge?.track_map_enabled !== false;
       const mapLats = _liveLats || [];
       const mapLons = _liveLons || [];
-      const curIdx = _nearestMapIdx(mapLats, mapLons, Number(p?.lat), Number(p?.lon));
+      const vid = _liveVideo();
+      const lapStart = _liveLaps?.[_selLapIdx]?.elapsed_start ?? 0;
+      let rawDot = { lat: Number(p?.lat), lon: Number(p?.lon) };
+      if (vid && Number(vid.duration) > 0 && _liveSession != null) {
+        const telT = vid.currentTime - _liveOffset - lapStart;
+        const ip = _interpLiveGpsAtTelT(telT);
+        if (ip && Number.isFinite(ip.lat) && Number.isFinite(ip.lon)) rawDot = ip;
+      }
+      const dotKey = `${_liveSession?.csv_path || ''}|${_selLapIdx}`;
+      if (_mapDotSessionKey !== dotKey) {
+        _mapDotSessionKey = dotKey;
+        _mapSmoothedDot = { ...rawDot };
+      } else if (_mapSmoothedDot && Number.isFinite(rawDot.lat) && Number.isFinite(rawDot.lon)) {
+        const a = 0.34;
+        _mapSmoothedDot = {
+          lat: _mapSmoothedDot.lat + a * (rawDot.lat - _mapSmoothedDot.lat),
+          lon: _mapSmoothedDot.lon + a * (rawDot.lon - _mapSmoothedDot.lon),
+        };
+      } else {
+        _mapSmoothedDot = { ...rawDot };
+      }
+      const curIdx = _nearestMapIdx(mapLats, mapLons, rawDot.lat, rawDot.lon);
       const refDispLats = (_mapRefLats && _mapRefLats.length)
         ? _mapRefLats
         : (_refLapPoints ? _refLapPoints.map(p => p.lat) : []);
@@ -391,6 +422,8 @@
       return {
         theme,
         lats: mapLats, lons: mapLons, cur_idx: curIdx,
+        dot_lat: _mapSmoothedDot?.lat ?? rawDot.lat,
+        dot_lon: _mapSmoothedDot?.lon ?? rawDot.lon,
         zoom_radius_m:  gauge?.zoom_radius_m ?? 150,
         show_ref:       gauge?.show_ref !== false,
         map_rotate_deg: gauge?.map_rotate_deg ?? 0,
@@ -481,16 +514,36 @@
       const timedLaps = laps.filter(l => !l.is_outlap && !l.is_inlap);
       const idx2      = Math.max(0, Math.min(frameIdx, (_livePoints?.length || 1) - 1));
       const p2        = _livePoints?.[idx2];
-      // Count only timed laps up to and including current selection
+      const curRow    = laps[_selLapIdx ?? 0] || null;
+      const frameLapNum = Number(p2?.lap);
+      const frameLapRow = Number.isFinite(frameLapNum)
+        ? laps.find(l => Number(l?.lap_num) === frameLapNum) || null
+        : null;
+      // Count only timed laps up to and including current selection (fallback when no li_*)
       const timedBefore = laps.slice(0, (_selLapIdx ?? 0) + 1)
                               .filter(l => !l.is_outlap && !l.is_inlap).length;
       const defs = _channelDefaults('lap_info');
+      let lapNum;
+      // UI contract: selected outlap always shows "Lap 0 / OUT LAP".
+      if (curRow?.is_outlap || frameLapRow?.is_outlap) {
+        lapNum = 0;
+      } else if (p2?.li_lap_num != null && Number.isFinite(Number(p2.li_lap_num))) {
+        lapNum = Math.round(Number(p2.li_lap_num));
+      } else {
+        lapNum = Math.max(1, timedBefore);
+      }
+      const totalLaps = (p2?.li_total_laps != null && Number.isFinite(Number(p2.li_total_laps)))
+        ? Math.max(1, Math.round(Number(p2.li_total_laps)))
+        : Math.max(1, laps.length);
+      const bestMode = gauge?.best_mode || defs.best_mode || 'so_far';
       return {
         ...base,
-        lap_num:     p2?.li_lap_num ?? (timedBefore || 1),
-        total_laps:  p2?.li_total_laps ?? (timedLaps.length || 1),
+        lap_num:     lapNum,
+        total_laps:  totalLaps,
         lap_elapsed: (p2?.t_display != null) ? Number(p2.t_display) : (p2?.t ?? 0),
         best_so_far: p2?.li_best_so_far ?? null,
+        session_best: p2?.li_session_best ?? (_liveSessionMeta?.best_secs ?? null),
+        best_mode: bestMode,
         delta_time:  _liveDeltaNow ?? null,
         text_align:  gauge?.text_align || defs.text_align || 'split',
         selected_fields: gauge?.selected_fields || defs.selected_fields || [],
@@ -688,18 +741,21 @@
       _deltaHistory = [];
       return;
     }
-    if (!_refLapCsvPath || !_refLapNum || !_liveSession) {
+    const refMode = _layout?.ref_mode || 'none';
+    const dynamicSoFar = refMode === 'session_best_so_far';
+    if ((!dynamicSoFar && (!_refLapCsvPath || !_refLapNum)) || !_liveSession) {
       _livePoints = _livePoints.map(p => ({ ...p, delta_time: null }));
       _liveDeltaNow = null;
       _deltaHistory = [];
       return;
     }
     const deltas = await API.computePreviewDelta(
-      _liveSession.csv_path, _selLapIdx, _refLapCsvPath, _refLapNum
+      _liveSession.csv_path, _selLapIdx, _refLapCsvPath, _refLapNum, refMode
     ).catch(() => []);
     _livePoints = _livePoints.map((p, i) => {
-      const dv = Number(deltas?.[i]);
-      return { ...p, delta_time: Number.isFinite(dv) ? dv : null };
+      const raw = deltas?.[i];
+      const dv = Number(raw);
+      return { ...p, delta_time: (raw != null && Number.isFinite(dv)) ? dv : null };
     });
   }
 
@@ -801,6 +857,20 @@
       .filter(v => Number.isFinite(v));
   }
 
+  /** Align preview frame / delta with current video time (or frame 0 if no video). */
+  function _syncPreviewFrameToVideo() {
+    if (!_livePoints?.length) return;
+    const vid = _liveVideo();
+    if (vid && vid.readyState >= 1 && vid.duration) {
+      const lapStart = _liveLaps?.[_selLapIdx]?.elapsed_start ?? 0;
+      const telT = vid.currentTime - _liveOffset - lapStart;
+      _liveFrameIdx = _findFrameIdx(telT);
+    } else {
+      _liveFrameIdx = 0;
+    }
+    _updateDeltaAtFrame(_liveFrameIdx);
+  }
+
   function _findFrameIdx(telT) {
     const pts = _livePoints;
     if (!pts || !pts.length) return 0;
@@ -816,9 +886,45 @@
     return lo;
   }
 
+  /** Linearly interpolate GPS along the preview timeline (sub-sample smooth motion). */
+  function _interpLiveGpsAtTelT(telT) {
+    const pts = _livePoints;
+    if (!pts?.length) return null;
+    const k0 = _timeKey(pts[0]);
+    if (telT <= k0) {
+      const a = pts[0];
+      return { lat: Number(a?.lat), lon: Number(a?.lon) };
+    }
+    const kLast = _timeKey(pts[pts.length - 1]);
+    if (telT >= kLast) {
+      const b = pts[pts.length - 1];
+      return { lat: Number(b?.lat), lon: Number(b?.lon) };
+    }
+    let lo = 0, hi = pts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (_timeKey(pts[mid]) < telT) lo = mid + 1; else hi = mid;
+    }
+    const i1 = lo;
+    const i0 = Math.max(0, i1 - 1);
+    const t0 = _timeKey(pts[i0]);
+    const t1 = _timeKey(pts[i1]);
+    const u = t1 > t0 ? (telT - t0) / (t1 - t0) : 0;
+    const la0 = Number(pts[i0]?.lat);
+    const lo0 = Number(pts[i0]?.lon);
+    const la1 = Number(pts[i1]?.lat);
+    const lo1 = Number(pts[i1]?.lon);
+    if (![la0, lo0, la1, lo1].every(Number.isFinite)) return null;
+    return {
+      lat: la0 + u * (la1 - la0),
+      lon: lo0 + u * (lo1 - lo0),
+    };
+  }
+
   function _rerenderLive() {
     const area = getPreviewEl();
     if (!area || !_layout) return;
+    _ensureLayoutGauges();
     area.querySelectorAll('.gauge-canvas').forEach(el => {
       const idx = parseInt(el.dataset.gaugeIdx);
       if (!isNaN(idx) && _layout.gauges[idx]) renderGaugeEl(el, _layout.gauges[idx]);
@@ -1009,13 +1115,18 @@
     _deltaHistory = [];
     _lastRefNearestIdx = null;
     _liveSpeedMax = 300;
-    if (scrub) scrub.value = 0;
+    _mapSmoothedDot = null;
+    _mapDotSessionKey = '';
+    // Only zero scrub for telemetry-only preview. With video, scrub tracks
+    // vid.currentTime — resetting to 0 fights switchLap's seek and desyncs delta.
+    const vidEarly = _liveVideo();
+    if (scrub && (!vidEarly || !vidEarly.duration)) scrub.value = 0;
 
     try {
       const pts = await API.loadPreviewHistory(_liveSession.csv_path, lapIdx);
       if (mountGen !== undefined && _mountGen !== mountGen) return;  // stale
 
-      const raw = pts || [];
+      const raw = Array.isArray(pts) ? pts : [];
       _livePoints = raw.map(pt => ({
         ...pt,
         gx_s: pt?.gx_s ?? (pt?.gx ?? 0),
@@ -1032,7 +1143,7 @@
       await _loadRefLapIfNeeded();
       await _syncPreviewMapTracks();
       await _recomputeDeltaSeries();
-      _updateDeltaAtFrame(0);
+      _syncPreviewFrameToVideo();
 
       if (labelEl) labelEl.textContent = `${_livePoints.length} samples · lap ${lapIdx + 1}`;
 
@@ -1041,13 +1152,20 @@
       if ((!vid || !vid.duration) && scrub && _livePoints.length) {
         const endT = _timeKey(_livePoints[_livePoints.length - 1]);
         scrub.max = Math.round(endT * 1000);
+      } else if (vid && scrub && vid.duration) {
+        scrub.value = String(Math.round(vid.currentTime * 1000));
       }
 
-      // Immediately render frame 0 so gauges show real data without waiting for RAF
+      // Render immediately; video seek may still be finishing — RAF will correct.
       _rerenderLive();
     } catch (e) {
       console.error('[_loadLapData] failed for lap', lapIdx, e);
       if (labelEl) labelEl.textContent = '遥测数据加载失败';
+      _livePoints = [];
+      _liveLats = [];
+      _liveLons = [];
+      _liveCumDist = [0];
+      _liveSpeedMax = 300;
     }
   }
 
@@ -1141,13 +1259,19 @@
     if (_mountGen !== myGen) return;  // navigated away while awaiting
 
     _liveSessionMeta = meta;
-    _liveLaps        = laps;
+    _liveLaps        = Array.isArray(laps) ? laps : [];
     _applyChannelMeta(channelMeta);
     _applyEditorCatalog(editorCatalog);
     // Default to the lap requested, but skip the outlap — start on the first timed lap.
+    const lapList = _liveLaps;
     let startIdx = session.lap_idx ?? 0;
-    if (laps[startIdx]?.is_outlap || laps[startIdx]?.is_inlap) {
-      const timedIdx = laps.findIndex(l => !l.is_outlap && !l.is_inlap);
+    if (lapList.length) {
+      startIdx = Math.max(0, Math.min(startIdx, lapList.length - 1));
+    } else {
+      startIdx = 0;
+    }
+    if (lapList[startIdx]?.is_outlap || lapList[startIdx]?.is_inlap) {
+      const timedIdx = lapList.findIndex(l => !l.is_outlap && !l.is_inlap);
       if (timedIdx >= 0) startIdx = timedIdx;
     }
     _selLapIdx = startIdx;
@@ -1155,8 +1279,8 @@
     // Seek video to the initial lap's start position if video is already loaded.
     // (vid_t = sync_offset + lap.elapsed_start — same formula as switchLap)
     const vid = _liveVideo();
-    if (vid && laps?.length && vid.readyState >= 1 && vid.duration) {
-      const lap    = laps[_selLapIdx] || laps[0];
+    if (vid && lapList.length && vid.readyState >= 1 && vid.duration) {
+      const lap    = lapList[_selLapIdx] || lapList[0];
       const seekTo = _liveOffset + (lap.elapsed_start || 0);
       vid.currentTime = Math.max(0, Math.min(vid.duration, seekTo));
       const scrub = _container?.querySelector('#live-scrub');
@@ -1243,6 +1367,7 @@
   function rebuildGaugeCanvases() {
     const area = getPreviewEl();
     if (!area || !_layout) return;
+    _ensureLayoutGauges();
 
     // Remove old gauge canvases and resize handles
     area.querySelectorAll('.gauge-canvas, .resize-handle').forEach(el => el.remove());
@@ -1295,6 +1420,7 @@
   function rerenderAll() {
     const area = getPreviewEl();
     if (!area || !_layout) return;
+    _ensureLayoutGauges();
     area.querySelectorAll('.gauge-canvas').forEach(el => {
       const idx = parseInt(el.dataset.gaugeIdx);
       if (!isNaN(idx) && _layout.gauges[idx]) {
@@ -1353,6 +1479,7 @@
   function _applySnap(g, type, draggedIdx) {
     const area   = getPreviewEl();
     const guides = { x: new Set(), y: new Set() };
+    _ensureLayoutGauges();
 
     // Collect edge snap positions: canvas boundaries
     const xEdges = [0, 1];
@@ -1564,6 +1691,7 @@
       ];
       const sel = g.selected_fields || _channelDefaults('lap_info').selected_fields || [];
       const align = g.text_align || 'split';
+      const bestMode = g.best_mode || _channelDefaults('lap_info').best_mode || 'so_far';
       return `
         <div style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px;">
           <div style="font-size:9px;color:var(--text3);margin-bottom:6px;
@@ -1575,6 +1703,13 @@
               <option value="left" ${align==='left'?'selected':''}>左对齐</option>
               <option value="center" ${align==='center'?'selected':''}>中对齐</option>
               <option value="right" ${align==='right'?'selected':''}>右对齐</option>
+            </select>
+          </div>
+          <div class="form-row" style="margin-bottom:6px;">
+            <span class="form-label">BEST 显示</span>
+            <select id="lapinfo-best-mode" style="width:150px;font-size:10px;">
+              <option value="so_far" ${bestMode==='so_far'?'selected':''}>本节到当前圈为止最快</option>
+              <option value="session" ${bestMode==='session'?'selected':''}>本节最快圈</option>
             </select>
           </div>
           ${LAP_INFO_ROWS.map(f => `
@@ -1932,6 +2067,11 @@
         rebuildGaugeCanvases();
         saveLayout();
       });
+      panel.querySelector('#lapinfo-best-mode')?.addEventListener('change', e => {
+        g.best_mode = e.target.value === 'session' ? 'session' : 'so_far';
+        rebuildGaugeCanvases();
+        saveLayout();
+      });
       panel.querySelectorAll('.lapinfo-field-chk').forEach(chk => {
         chk.addEventListener('change', () => {
           const checked = [...panel.querySelectorAll('.lapinfo-field-chk')]
@@ -2144,6 +2284,7 @@
   function rebuildGaugeList() {
     const list = _container?.querySelector('#gauge-list');
     if (!list || !_layout) return;
+    _ensureLayoutGauges();
 
     list.innerHTML = _layout.gauges.map((g, idx) => {
       const ch      = _ALL_CHANNELS.find(c => c.value === g.channel)?.label || g.channel;
@@ -2198,6 +2339,7 @@
   }
 
   function addGauge() {
+    _ensureLayoutGauges();
     const speedStyles = _stylesForChannel('speed');
     const newG = {
       channel: 'speed',
@@ -2370,18 +2512,18 @@
                 </div>
               </div>
             </div>
-
-            <!-- Scrub strip -->
-            <div id="live-strip" style="padding:6px 12px; flex-shrink:0;
-                  border-top:1px solid var(--border); background:var(--sidebar);
-                  display:flex; align-items:center; gap:8px;">
-              <button id="live-play" class="btn btn-sm" style="width:32px;padding:0;flex-shrink:0">▶</button>
-              <span id="live-time" style="font-size:10px;color:var(--acc2);
-                    font-variant-numeric:tabular-nums;width:64px;flex-shrink:0">0:00.000</span>
+            <!-- Scrub strip (outside video, top edge touches video bottom) -->
+            <div id="live-strip" style="padding:10px 12px 8px 12px; margin-top:0;
+                  border-top:0; background:var(--sidebar);
+                  display:flex; align-items:center; gap:10px;">
+              <button id="live-play" class="btn btn-sm"
+                      style="width:44px;height:34px;padding:0;flex-shrink:0;font-size:16px;line-height:1;">▶</button>
+              <span id="live-time" style="font-size:12px;color:var(--acc2);
+                    font-variant-numeric:tabular-nums;width:74px;flex-shrink:0">0:00.000</span>
               <input type="range" id="live-scrub" min="0" max="1000" step="1" value="0"
-                     style="flex:1;accent-color:var(--acc);cursor:pointer;">
-              <span id="live-label" style="font-size:9px;color:var(--text3);flex-shrink:0;
-                    max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                     style="flex:1;accent-color:var(--acc);cursor:pointer;height:20px;">
+              <span id="live-label" style="font-size:10px;color:var(--text2);flex-shrink:0;
+                    max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
                 ${hasVideo ? '正在加载遥测数据…' : '未加载节'}
               </span>
             </div>
@@ -2424,7 +2566,7 @@
     if (!sameSession) {
       try {
         _layout = await API.getOverlay();
-        _layout.gauges = _layout.gauges || [];
+        _layout.gauges = Array.isArray(_layout.gauges) ? _layout.gauges : [];
       } catch (_) {
         _layout = { is_bike: false, theme: 'Dark', gauges: [] };
       }
@@ -2580,6 +2722,7 @@
       const presets = await API.getConfig().then(c => c.presets || {});
       if (presets[name]) {
         _layout = { ...presets[name], active_preset: name };
+        _ensureLayoutGauges();
         _selected = null;
         rebuildThemeSelector();
         rebuildGaugeList();
@@ -2638,6 +2781,8 @@
     if (_animFrame) { cancelAnimationFrame(_animFrame); _animFrame = null; }
     _stopLiveRaf();
     if (_resizeObserver) { _resizeObserver.disconnect(); _resizeObserver = null; }
+    _mapSmoothedDot = null;
+    _mapDotSessionKey = '';
     _container = null;
     // Live session state (_livePoints, _liveLaps, _liveSession, etc.) is intentionally
     // preserved so that returning to this page skips all Python round-trips.

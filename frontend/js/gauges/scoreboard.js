@@ -16,7 +16,8 @@ const GaugeScoreboard = {
     const lapNum    = Math.max(0, Math.round(data.lap_num    ?? 1));
     const totalLaps = Math.max(1, Math.round(data.total_laps ?? 1));
     const elapsed   = data.lap_elapsed ?? 0;
-    const best      = data.best_so_far;   // number or null/undefined
+    const bestMode  = data.best_mode === 'session' ? 'session' : 'so_far';
+    const best      = (bestMode === 'session') ? data.session_best : data.best_so_far;
 
     // Delta — show only live reference-lap delta when available.
     let deltaTxt, deltaCol;

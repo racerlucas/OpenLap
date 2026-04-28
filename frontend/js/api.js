@@ -123,8 +123,8 @@ const API = (() => {
     getLaps:           (csvPath)       => call('get_laps', csvPath),
     loadLapHistory:    (csvPath, lapIdx) => call('load_lap_history', csvPath, lapIdx),
     loadPreviewHistory: (csvPath, lapIdx) => call('load_preview_history', csvPath, lapIdx),
-    computePreviewDelta: (csvPath, lapIdx, refCsvPath, refLapNum) =>
-      call('compute_preview_delta', csvPath, lapIdx, refCsvPath, refLapNum),
+    computePreviewDelta: (csvPath, lapIdx, refCsvPath, refLapNum, refMode = '') =>
+      call('compute_preview_delta', csvPath, lapIdx, refCsvPath, refLapNum, refMode),
     getPreviewMapTracks: (csvPath, lapIdx, refCsvPath, refLapNum) =>
       call('get_preview_map_tracks', csvPath, lapIdx, refCsvPath, refLapNum),
 

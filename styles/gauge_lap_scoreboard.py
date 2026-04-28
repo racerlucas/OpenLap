@@ -39,7 +39,10 @@ def render(data: dict, w: int, h: int):
     lap_num    = int(data.get('lap_num',    1))
     total_laps = int(data.get('total_laps', 1))
     elapsed    = float(data.get('lap_elapsed', 0.0))
-    best       = data.get('best_so_far')   # float or None
+    best_mode  = str(data.get('best_mode', 'so_far')).lower()
+    if best_mode not in ('so_far', 'session'):
+        best_mode = 'so_far'
+    best       = data.get('session_best') if best_mode == 'session' else data.get('best_so_far')
 
     # ── Delta — use live reference-lap delta when available ───────────────────
     delta_raw = data.get('delta_time')

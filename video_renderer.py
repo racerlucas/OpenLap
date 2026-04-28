@@ -28,7 +28,9 @@ from telemetry_algorithms import (
     build_effective_session_meta,
     build_complete_map_track,
     build_map_track,
-    compute_best_so_far_state,
+    build_lap_info_lookup,
+    build_history_row,
+    lap_info_fields_for_sample,
     lap_time_display_value,
 )
 
@@ -560,7 +562,7 @@ def render_lap(
         _ref_lap_duration = reference_lap.duration
 
     # ── Lap-scoreboard pre-computation (shared with preview path) ────────────
-    _total_timed, _best_by_lap, _best_fallback = compute_best_so_far_state(session.laps)
+    _lap_info_lookup = build_lap_info_lookup(session.laps)
 
     # ── History buffers (deque gives O(1) eviction, no manual trimming) ───────
     HISTORY_MAX   = int(10.0 * fps)
@@ -592,6 +594,9 @@ def render_lap(
 
                 pt = session.interpolate_at(sess_t)
                 if pt:
+                    _li = lap_info_fields_for_sample(
+                        session.laps, float(sess_t), int(pt.lap), _lap_info_lookup
+                    )
                     # For per-lap export:
                     # - keep timer within lap bounds while the lap is active
                     # - hold final lap time for a short post-finish window
@@ -651,21 +656,13 @@ def render_lap(
                         except Exception:
                             pass
 
-                    history_buf.append({
-                        't':              lap_t_display,
-                        'speed':          pt.speed,
-                        'gx':             pt.gforce_x,
-                        'gy':             pt.gforce_y,
-                        'lean':           pt.lean_angle,
-                        'rpm':            pt.rpm,
-                        'exhaust_temp':   pt.exhaust_temp,
-                        'delta_time':     delta_val,
-                        'alt':            pt.alt,
-                        # Lap-scoreboard fields
-                        'li_lap_num':     pt.lap,
-                        'li_total_laps':  _total_timed,
-                        'li_best_so_far': reference_lap.duration if reference_lap else _best_by_lap.get(pt.lap, _best_fallback),
-                    })
+                    row = build_history_row(
+                        p=pt,
+                        lap_t=lap_t_display,
+                        delta_time=delta_val,
+                        lap_info=_li,
+                    )
+                    history_buf.append(row)
 
                 # ── Map nearest-point (vectorised numpy, one call per frame) ───
                 cur_map_idx = 0

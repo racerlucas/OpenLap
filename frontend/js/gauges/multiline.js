@@ -26,7 +26,7 @@ function _multilineColour(entry) {
 const GaugeMultiline = {
   render(ctx, data, w, h) {
     const theme   = GaugeBase.getTheme(data.theme || 'Dark');
-    const entries = data.multi_channels || [];
+    const entries = (data.multi_channels || []).filter(e => e != null);
 
     GaugeBase.drawBackground(ctx, w, h, theme);
 

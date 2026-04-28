@@ -59,6 +59,9 @@ const GaugeMap = {
     const lats     = data.lats   || [];
     const lons     = data.lons   || [];
     const curIdx   = data.cur_idx ?? 0;
+    const dotLat   = Number(data.dot_lat);
+    const dotLon   = Number(data.dot_lon);
+    const useGpsDot = Number.isFinite(dotLat) && Number.isFinite(dotLon);
     const osmLats  = data.track_map_lats  || [];
     const osmLons  = data.track_map_lons  || [];
     const osmAreas = data.track_map_areas || [];
@@ -176,9 +179,9 @@ const GaugeMap = {
     ctx.fillStyle = theme.map_start || '#00ff88';
     ctx.fill();
 
-    // Current position dot
+    // Current position dot (prefer smooth GPS from telemetry over polyline vertex snap)
     const idx   = Math.max(0, Math.min(curIdx, n - 1));
-    const pDot  = toScreen(lats[idx], lons[idx]);
+    const pDot  = useGpsDot ? toScreen(dotLat, dotLon) : toScreen(lats[idx], lons[idx]);
     const dotR  = Math.max(4, w * 0.025);
 
     ctx.beginPath();
@@ -199,6 +202,9 @@ const GaugeMap = {
     const lats       = data.lats   || [];
     const lons       = data.lons   || [];
     const curIdx     = data.cur_idx ?? 0;
+    const dotLatZ    = Number(data.dot_lat);
+    const dotLonZ    = Number(data.dot_lon);
+    const useGpsDotZ = Number.isFinite(dotLatZ) && Number.isFinite(dotLonZ);
     const radius     = Math.max(10, data.zoom_radius_m ?? 150);
     const showRef    = data.show_ref !== false;
     const refLats    = data.ref_lats || [];
@@ -221,8 +227,8 @@ const GaugeMap = {
     }
 
     const safeIdx   = Math.max(0, Math.min(curIdx, lats.length - 1));
-    const centerLat = lats[safeIdx];
-    const centerLon = lons[safeIdx];
+    const centerLat = useGpsDotZ ? dotLatZ : lats[safeIdx];
+    const centerLon = useGpsDotZ ? dotLonZ : lons[safeIdx];
 
     // GPS → local metres
     const LAT_M = 111000;
@@ -349,8 +355,8 @@ const GaugeMap = {
       ctx.stroke();
     }
 
-    // Current position dot
-    const pDot = toScreen(lats[safeIdx], lons[safeIdx]);
+    // Current position dot (telemetry GPS when provided)
+    const pDot = useGpsDotZ ? toScreen(dotLatZ, dotLonZ) : toScreen(lats[safeIdx], lons[safeIdx]);
     const dotR = Math.max(4, w * 0.028);
     ctx.beginPath();
     ctx.arc(pDot.x, pDot.y, dotR, 0, Math.PI * 2);

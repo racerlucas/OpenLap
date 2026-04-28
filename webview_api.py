@@ -706,6 +706,7 @@ class WebviewAPI:
                 ref_lap_csv_path=ref_lap_csv_path or '',
                 ref_lap_num=int(ref_lap_num or 0),
                 current_lap_num=cur_lap_num,
+                current_lap_idx=int(lap_idx),
                 load_session_fn=self._load_session,
             )
             if not ref_lap:
@@ -743,30 +744,14 @@ class WebviewAPI:
         self._config.save()
         return {'ok': True}
 
-    @staticmethod
-    def _sample_session_points(session, start_elapsed: float, end_elapsed: float, sample_hz: float = 60.0):
-        """Sample session telemetry via Session.interpolate_at on a fixed time grid."""
-        if not session or not getattr(session, 'all_points', None):
-            return []
-        t0 = float(start_elapsed)
-        t1 = max(t0, float(end_elapsed))
-        hz = max(1.0, float(sample_hz))
-        dt = 1.0 / hz
-        n_steps = max(0, int((t1 - t0) * hz))
-        sample_times = [t0 + i * dt for i in range(n_steps + 1)]
-        if not sample_times or sample_times[-1] < t1:
-            sample_times.append(t1)
-        out = []
-        for sess_abs in sample_times:
-            p = session.interpolate_at(sess_abs)
-            if p is not None:
-                out.append((float(sess_abs), p))
-        return out
-
     def load_lap_history(self, csv_path: str, lap_idx: int) -> list:
         """Return telemetry data points for one lap as a list of dicts."""
         try:
-            from gauge_channels import _ema_smooth
+            from telemetry_algorithms import (
+                apply_g_meter_smoothing_inplace,
+                channel_fields_from_datapoint,
+                sample_session_points,
+            )
             session = self._load_session(csv_path)
             if not session or lap_idx >= len(session.laps):
                 return []
@@ -775,33 +760,13 @@ class WebviewAPI:
                 return []
             lap_start = float(lap.points[0].elapsed)
             lap_end = lap_start + float(lap.duration or 0.0)
-            samples = self._sample_session_points(session, lap_start, lap_end, sample_hz=60.0)
+            samples = sample_session_points(session, lap_start, lap_end, sample_hz=60.0)
             points = []
             for _, p in samples:
-                d = {
-                    't':            float(p.lap_elapsed),    # lap-relative elapsed (0 → lap_duration)
-                    'speed':        float(p.speed),          # km/h
-                    'gx':           float(p.gforce_x),       # longitudinal G
-                    'gy':           float(p.gforce_y),       # lateral G
-                    'rpm':          float(p.rpm or 0),
-                    'exhaust_temp': float(p.exhaust_temp or 0),
-                    'alt':          float(p.alt),
-                    'lat':          float(p.lat),
-                    'lon':          float(p.lon),
-                    'lean':         float(p.lean_angle),
-                }
+                d = channel_fields_from_datapoint(p)
+                d['t'] = float(p.lap_elapsed)
                 points.append(d)
-            # Keep preview smoothing source-of-truth in Python so editor and
-            # export use the same EMA method/parameters.
-            gx_s = _ema_smooth([p['gx'] for p in points]) if points else []
-            gy_s = _ema_smooth([p['gy'] for p in points]) if points else []
-            g_total_raw = [((p['gx'] ** 2 + p['gy'] ** 2) ** 0.5) for p in points] if points else []
-            g_total_s = _ema_smooth(g_total_raw) if points else []
-            for i, p in enumerate(points):
-                p['gx_s'] = gx_s[i] if i < len(gx_s) else p['gx']
-                p['gy_s'] = gy_s[i] if i < len(gy_s) else p['gy']
-                p['g_total'] = g_total_raw[i] if i < len(g_total_raw) else 0.0
-                p['g_total_s'] = g_total_s[i] if i < len(g_total_s) else p['g_total']
+            apply_g_meter_smoothing_inplace(points)
             return points
         except Exception as e:
             logger.exception('load_lap_history failed for %s lap %d: %s', csv_path, lap_idx, e)
@@ -821,8 +786,14 @@ class WebviewAPI:
         - ``lap``: lap number from the telemetry row.
         """
         try:
-            from gauge_channels import _ema_smooth
-            from telemetry_algorithms import compute_best_so_far_state, lap_time_display_value
+            from telemetry_algorithms import (
+                apply_g_meter_smoothing_inplace,
+                build_lap_info_lookup,
+                build_history_row,
+                lap_info_fields_for_sample,
+                lap_time_display_value,
+                sample_session_points,
+            )
             session = self._load_session(csv_path)
             if not session or lap_idx >= len(session.laps):
                 return []
@@ -831,53 +802,39 @@ class WebviewAPI:
                 return []
             t0 = float(lap.points[0].elapsed)
             lap_dur = float(lap.duration or 0.0)
-            total_timed, best_by_lap, best_fallback = compute_best_so_far_state(session.laps)
+            lap_info_lookup = build_lap_info_lookup(session.laps)
             points = []
             end_elapsed = float(session.all_points[-1].elapsed) if session.all_points else t0
-            samples = self._sample_session_points(session, t0, end_elapsed, sample_hz=60.0)
+            samples = sample_session_points(session, t0, end_elapsed, sample_hz=60.0)
             for sess_abs, p in samples:
                 sess_rel = float(sess_abs) - t0
-                d = {
-                    't':            float(p.lap_elapsed),
-                    't_display':    lap_time_display_value(
-                        raw_lap_t=sess_rel,
-                        lap_dur=lap_dur,
-                        live_lap_elapsed=float(p.lap_elapsed),
-                    ),
-                    'sess_rel':     sess_rel,
-                    'lap':          int(p.lap),
-                    'speed':        float(p.speed),
-                    'gx':           float(p.gforce_x),
-                    'gy':           float(p.gforce_y),
-                    'rpm':          float(p.rpm or 0),
-                    'exhaust_temp': float(p.exhaust_temp or 0),
-                    'alt':          float(p.alt),
-                    'lat':          float(p.lat),
-                    'lon':          float(p.lon),
-                    'lean':         float(p.lean_angle),
-                    # Keep lap-scoreboard fields aligned with export pipeline.
-                    'li_lap_num':    int(p.lap),
-                    'li_total_laps': int(total_timed),
-                    'li_best_so_far': best_by_lap.get(int(p.lap), best_fallback),
-                }
+                li = lap_info_fields_for_sample(
+                    session.laps, float(sess_abs), int(p.lap), lap_info_lookup
+                )
+                lap_t_display = lap_time_display_value(
+                    raw_lap_t=sess_rel,
+                    lap_dur=lap_dur,
+                    live_lap_elapsed=float(p.lap_elapsed),
+                )
+                d = build_history_row(
+                    p=p,
+                    lap_t=lap_t_display,
+                    delta_time=None,
+                    lap_info=li,
+                )
+                d['t_display'] = float(lap_t_display)
+                d['sess_rel'] = sess_rel
+                d['lap'] = int(p.lap)
                 points.append(d)
-            # Use the same smoothing implementation/alpha as export path.
-            gx_s = _ema_smooth([p['gx'] for p in points]) if points else []
-            gy_s = _ema_smooth([p['gy'] for p in points]) if points else []
-            g_total_raw = [((p['gx'] ** 2 + p['gy'] ** 2) ** 0.5) for p in points] if points else []
-            g_total_s = _ema_smooth(g_total_raw) if points else []
-            for i, p in enumerate(points):
-                p['gx_s'] = gx_s[i] if i < len(gx_s) else p['gx']
-                p['gy_s'] = gy_s[i] if i < len(gy_s) else p['gy']
-                p['g_total'] = g_total_raw[i] if i < len(g_total_raw) else 0.0
-                p['g_total_s'] = g_total_s[i] if i < len(g_total_s) else p['g_total']
+            apply_g_meter_smoothing_inplace(points)
             return points
         except Exception as e:
             logger.exception('load_preview_history failed for %s lap %d: %s', csv_path, lap_idx, e)
             return []
 
     def compute_preview_delta(self, csv_path: str, lap_idx: int,
-                              ref_csv_path: str, ref_lap_num: int) -> list:
+                              ref_csv_path: str, ref_lap_num: int,
+                              ref_mode: str = '') -> list:
         """Compute per-sample delta series for editor preview.
 
         Uses the same delta core as export (delta_time.make_delta_fn +
@@ -885,44 +842,35 @@ class WebviewAPI:
         ``load_preview_history(csv_path, lap_idx)`` order.
         """
         try:
-            import numpy as np
-            from delta_time import compute_lap_profile, make_delta_fn
-
-            if not ref_csv_path or not ref_lap_num:
-                return []
+            from delta_time import compute_lap_profile
 
             cur_sess = self._load_session(csv_path)
             if not cur_sess or lap_idx >= len(cur_sess.laps):
                 return []
             cur_lap = cur_sess.laps[lap_idx]
 
-            ref_sess = self._load_session(ref_csv_path)
-            if not ref_sess:
-                return []
-            ref_lap = next((l for l in ref_sess.laps if int(getattr(l, 'lap_num', 0)) == int(ref_lap_num)), None)
-            if ref_lap is None:
-                return []
+            dynamic_so_far = (ref_mode == 'session_best_so_far')
+            ref_lap = None
+            if not dynamic_so_far:
+                if not ref_csv_path or not ref_lap_num:
+                    return []
+                ref_sess = self._load_session(ref_csv_path)
+                if not ref_sess:
+                    return []
+                ref_lap = next((l for l in ref_sess.laps if int(getattr(l, 'lap_num', 0)) == int(ref_lap_num)), None)
+                if ref_lap is None:
+                    return []
 
-            delta_fn = make_delta_fn(ref_lap, current_lap_duration=cur_lap.duration)
             cur_t, cur_d = compute_lap_profile(cur_lap)
             if len(cur_t) < 2 or len(cur_d) < 2:
                 return []
 
+            from telemetry_algorithms import compute_preview_delta_series, sample_session_points
+
             t0 = float(cur_lap.points[0].elapsed) if cur_lap.points else 0.0
             end_elapsed = float(cur_sess.all_points[-1].elapsed) if cur_sess.all_points else t0
-            samples = self._sample_session_points(cur_sess, t0, end_elapsed, sample_hz=60.0)
-            out = []
-            for _, p in samples:
-                lap_elapsed = float(p.lap_elapsed)
-                try:
-                    cur_dist = float(np.interp(lap_elapsed, cur_t, cur_d))
-                    if not np.isfinite(cur_dist):
-                        cur_dist = 0.0
-                    dv = float(delta_fn(lap_elapsed, cur_dist))
-                    out.append(dv if np.isfinite(dv) else 0.0)
-                except Exception:
-                    out.append(0.0)
-            return out
+            samples = sample_session_points(cur_sess, t0, end_elapsed, sample_hz=60.0)
+            return compute_preview_delta_series(cur_sess, samples, ref_lap, dynamic_so_far)
         except Exception as e:
             logger.exception('compute_preview_delta failed for %s lap %d: %s', csv_path, lap_idx, e)
             return []
@@ -1038,10 +986,10 @@ class WebviewAPI:
                 'lean': '倾角',
                 'altitude': '海拔',
                 'lap_time': '圈速',
-                'delta_time': '差值',
+                'delta_time': '实时秒差',
                 'map': '地图',
-                'info': '节信息',
-                'lap_info': '圈信息',
+                'info': '本节信息',
+                'lap_info': '单圈信息',
                 'multi': '多曲线',
                 'image': '图片 / Logo',
             }

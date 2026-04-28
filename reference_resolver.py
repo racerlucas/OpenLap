@@ -24,6 +24,7 @@ def resolve_reference_lap(
     ref_lap_csv_path: str                = '',
     ref_lap_num:      int                = 0,
     current_lap_num:  Optional[int]      = None,
+    current_lap_idx:  Optional[int]      = None,
     load_session_fn:  Optional[Callable] = None,
 ) -> Tuple:
     """Return (Lap | None, description_str)."""
@@ -38,8 +39,14 @@ def resolve_reference_lap(
         if current_lap_num is None:
             lap = sess.fastest_lap
         else:
-            prev = [l for l in sess.timed_laps if l.lap_num < current_lap_num]
-            lap  = min(prev, key=lambda l: l.duration) if prev else None
+            from telemetry_algorithms import best_so_far_timed_lap_before_index
+            # Prefer index-based "best-so-far" because lap numbers can be non-monotonic
+            # (manual tags, imported counters, merged sessions, etc.).
+            if current_lap_idx is not None and 0 <= int(current_lap_idx) < len(getattr(sess, 'laps', []) or []):
+                lap = best_so_far_timed_lap_before_index(sess, int(current_lap_idx))
+            else:
+                prev = [l for l in sess.timed_laps if l.lap_num < current_lap_num]
+                lap = min(prev, key=lambda l: l.duration) if prev else None
         if lap is not None:
             setattr(lap, '_source_csv_path', getattr(sess, 'csv_path', '') or '')
         return (lap, f'best so far ({lap.duration:.3f}s)') if lap else (None, 'no prior laps')
