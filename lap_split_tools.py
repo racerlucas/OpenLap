@@ -128,7 +128,7 @@ def auto_split_file_with_track_json(
     }
 
 
-def launch_gui_split() -> dict:
+def launch_gui_split(telemetry_path: str | None = None) -> dict:
     import subprocess
     import sys
 
@@ -144,10 +144,35 @@ def launch_gui_split() -> dict:
     if os.name == "nt":
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
 
+    argv = [sys.executable, str(gui_path)]
+    resolved_telemetry: str | None = None
+    if telemetry_path:
+        p = Path(telemetry_path).expanduser().resolve()
+        if not p.is_file():
+            return {
+                "started": False,
+                "error": f"Telemetry file not found: {p}",
+                "script": str(gui_path),
+            }
+        ext = p.suffix.lower()
+        if ext not in {".gpx", ".vbo"}:
+            return {
+                "started": False,
+                "error": "Manual lap split only supports .gpx / .vbo files.",
+                "script": str(gui_path),
+            }
+        resolved_telemetry = str(p)
+        argv.append(resolved_telemetry)
+
     proc = subprocess.Popen(
-        [sys.executable, str(gui_path)],
+        argv,
         cwd=str(gui_path.parent),
         env=env,
         creationflags=creationflags,
     )
-    return {"started": True, "pid": proc.pid, "script": str(gui_path)}
+    return {
+        "started": True,
+        "pid": proc.pid,
+        "script": str(gui_path),
+        "telemetry_path": resolved_telemetry,
+    }

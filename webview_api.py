@@ -2100,10 +2100,14 @@ class WebviewAPI:
         from lap_split_tools import auto_split_file_with_track_json
         return auto_split_file_with_track_json(json_path, telemetry_path)
 
-    def launch_manual_lap_split_gui(self) -> dict:
-        """Launch test_data_process/gui_split.py in a separate process."""
+    def launch_manual_lap_split_gui(self, telemetry_path: str | None = None) -> dict:
+        """Launch lap_split_tools/gui_split.py in a separate process.
+
+        When ``telemetry_path`` is a .gpx/.vbo file, the GUI loads it on startup
+        so the user does not need to pick the file manually.
+        """
         from lap_split_tools import launch_gui_split
-        return launch_gui_split()
+        return launch_gui_split(telemetry_path)
 
     def list_track_jsons(self) -> list:
         """List track JSON files from repository-local tracks/ directory."""
