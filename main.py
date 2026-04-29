@@ -3,6 +3,9 @@ main.py — OpenLap entry point.
 
 Run with:
     python main.py
+
+Telemetry / preview / export boundaries live in ``telemetry_algorithms.py`` and
+``webview_api.py`` module docstrings (what must match vs what may diverge).
 """
 from __future__ import annotations
 
@@ -21,12 +24,20 @@ def _setup_logging() -> None:
         str(log_dir / 'openlap.log'), maxBytes=2*1024*1024, backupCount=3, encoding='utf-8')
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(fmt)
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(logging.INFO)
+    ch.setFormatter(fmt)
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
     root.addHandler(fh)
+    root.addHandler(ch)
 
 
 _setup_logging()
+
+from opencv_ffmpeg_env import apply_ffmpeg_capture_thread_limit
+
+apply_ffmpeg_capture_thread_limit()
 
 # ── Locate frontend assets ────────────────────────────────────────────────────
 # When running from source:  frontend/ is next to main.py

@@ -1,7 +1,7 @@
 /**
  * compare.js — Dual-trace line chart: current lap vs reference lap.
  *
- * Mirrors styles/gauge_compare.py
+ * Editor Canvas preview; ``data`` keys match ``styles/gauge_compare.py`` / export.
  *
  * data keys: value, history_vals, ref_history_vals, label, unit,
  *            min_val, max_val, symmetric, channel

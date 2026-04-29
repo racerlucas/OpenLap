@@ -1,7 +1,7 @@
 /**
  * map.js — GPS circuit map gauge.
  *
- * Mirrors styles/map_circuit.py and styles/map_zoomed.py
+ * Editor Canvas preview; ``data`` keys match ``styles/map_*.py`` / export.
  *
  * data keys: lats (array), lons (array), cur_idx (int)
  * theme keys: map_bg_rgba, map_track_outer, map_track_inner, map_dot, map_start
@@ -50,12 +50,6 @@ const GaugeMap = {
   render(ctx, data, w, h) {
     const theme = GaugeBase.getTheme(data.theme || 'Dark');
 
-    // Background
-    ctx.fillStyle = theme.map_bg_rgba || 'rgba(0,0,0,0.65)';
-    ctx.beginPath();
-    GaugeBase.roundRect(ctx, 2, 2, w - 4, h - 4, Math.max(4, Math.round(Math.min(w, h) * 0.04)));
-    ctx.fill();
-
     const lats     = data.lats   || [];
     const lons     = data.lons   || [];
     const curIdx   = data.cur_idx ?? 0;
@@ -70,6 +64,11 @@ const GaugeMap = {
     const mirrorY = data.map_mirror_y === true;
 
     if (lats.length < 2 || lons.length < 2) {
+      // Background
+      ctx.fillStyle = theme.map_bg_rgba || 'rgba(0,0,0,0.65)';
+      ctx.beginPath();
+      GaugeBase.roundRect(ctx, 2, 2, w - 4, h - 4, Math.max(4, Math.round(Math.min(w, h) * 0.04)));
+      ctx.fill();
       ctx.fillStyle    = theme.label || '#4e6578';
       ctx.font         = `${Math.round(w * 0.08)}px 'Segoe UI', sans-serif`;
       ctx.textAlign    = 'center';
@@ -78,110 +77,164 @@ const GaugeMap = {
       return;
     }
 
-    // Compute bounding box from GPS trace + OSM geometry combined
-    const pad     = 0.10;
-    const allLats = osmLats.length ? [...lats, ...osmLats] : lats;
-    const allLons = osmLons.length ? [...lons, ...osmLons] : lons;
-    const minLat  = Math.min(...allLats);
-    const maxLat  = Math.max(...allLats);
-    const minLon  = Math.min(...allLons);
-    const maxLon  = Math.max(...allLons);
-    const spanLat = maxLat - minLat || 1e-6;
-    const spanLon = maxLon - minLon || 1e-6;
-
-    // Scale preserving aspect ratio
-    const availW = w * (1 - 2 * pad);
-    const availH = h * (1 - 2 * pad);
-    const scaleX = availW / spanLon;
-    const scaleY = availH / spanLat;
-    const scale  = Math.min(scaleX, scaleY);
-    const offX   = w * pad + (availW - spanLon * scale) / 2;
-    const offY   = h * pad + (availH - spanLat * scale) / 2;
-    const tcx = w * 0.5;
-    const tcy = h * 0.5;
-
-    function toScreen(lat, lon) {
-      const raw = {
-        x: offX + (lon - minLon) * scale,
-        y: h - offY - (lat - minLat) * scale,  // flip y (north up)
-      };
-      return _transformPoint(raw.x, raw.y, tcx, tcy, rotateDeg, mirrorX, mirrorY);
+    // ── Cache base layer (background + track polyline + OSM + start marker) ──
+    // This prevents full-track redraw on every seek/jump; only the red dot changes.
+    if (!GaugeMap._cache) {
+      GaugeMap._cache = { arrIds: new WeakMap(), nextArrId: 1, circuit: new Map() };
     }
-
-    // Pre-project screen coordinates once per dataset
-    const osmXs = [], osmYs = [];
-    if (osmLats.length >= 2 && osmLons.length >= 2) {
-      const on = Math.min(osmLats.length, osmLons.length);
-      for (let i = 0; i < on; i++) {
-        const p = toScreen(osmLats[i], osmLons[i]);
-        osmXs.push(p.x); osmYs.push(p.y);
-      }
-    }
-
+    const _c = GaugeMap._cache;
+    const _arrId = (arr) => {
+      if (!arr || typeof arr !== 'object') return 0;
+      const got = _c.arrIds.get(arr);
+      if (got) return got;
+      const id = _c.nextArrId++;
+      _c.arrIds.set(arr, id);
+      return id;
+    };
     const n = Math.min(lats.length, lons.length);
-    const gpsXs = [], gpsYs = [];
-    for (let i = 0; i < n; i++) {
-      const p = toScreen(lats[i], lons[i]);
-      gpsXs.push(p.x); gpsYs.push(p.y);
-    }
+    const key = [
+      w, h,
+      rotateDeg, mirrorX ? 1 : 0, mirrorY ? 1 : 0,
+      _arrId(lats), _arrId(lons),
+      _arrId(osmLats), _arrId(osmLons),
+      // areas array identity is enough; contents don't change during a session
+      _arrId(osmAreas),
+      n,
+      // Theme tokens that affect the base layer
+      theme.map_bg_rgba || '',
+      theme.map_track_outer || '',
+      theme.map_track_inner || '',
+      theme.map_start || '',
+    ].join('|');
 
-    // OSM area polygons — filled track surface, drawn first (lowest layer)
-    if (osmAreas.length) {
-      ctx.fillStyle = 'rgba(74,85,104,0.55)';
-      for (const area of osmAreas) {
-        const aLats = area.lats || [];
-        const aLons = area.lons || [];
-        const an = Math.min(aLats.length, aLons.length);
-        if (an < 3) continue;
-        ctx.beginPath();
-        for (let i = 0; i < an; i++) {
-          const p = toScreen(aLats[i], aLons[i]);
-          if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+    let base = _c.circuit.get(key);
+    if (!base) {
+      const off = document.createElement('canvas');
+      off.width = Math.max(1, w);
+      off.height = Math.max(1, h);
+      const octx = off.getContext('2d');
+      if (octx) {
+        // Background
+        octx.fillStyle = theme.map_bg_rgba || 'rgba(0,0,0,0.65)';
+        octx.beginPath();
+        GaugeBase.roundRect(octx, 2, 2, w - 4, h - 4, Math.max(4, Math.round(Math.min(w, h) * 0.04)));
+        octx.fill();
+
+        // Compute bounding box from GPS trace + OSM geometry combined
+        const pad     = 0.10;
+        const allLats = osmLats.length ? [...lats, ...osmLats] : lats;
+        const allLons = osmLons.length ? [...lons, ...osmLons] : lons;
+        const minLat  = Math.min(...allLats);
+        const maxLat  = Math.max(...allLats);
+        const minLon  = Math.min(...allLons);
+        const maxLon  = Math.max(...allLons);
+        const spanLat = maxLat - minLat || 1e-6;
+        const spanLon = maxLon - minLon || 1e-6;
+
+        // Scale preserving aspect ratio
+        const availW = w * (1 - 2 * pad);
+        const availH = h * (1 - 2 * pad);
+        const scaleX = availW / spanLon;
+        const scaleY = availH / spanLat;
+        const scale  = Math.min(scaleX, scaleY);
+        const offX   = w * pad + (availW - spanLon * scale) / 2;
+        const offY   = h * pad + (availH - spanLat * scale) / 2;
+        const tcx = w * 0.5;
+        const tcy = h * 0.5;
+
+        function toScreen(lat, lon) {
+          const raw = {
+            x: offX + (lon - minLon) * scale,
+            y: h - offY - (lat - minLat) * scale,  // flip y (north up)
+          };
+          return _transformPoint(raw.x, raw.y, tcx, tcy, rotateDeg, mirrorX, mirrorY);
         }
-        ctx.closePath();
-        ctx.fill();
+
+        // Pre-project screen coordinates once per dataset
+        const osmXs = [], osmYs = [];
+        if (osmLats.length >= 2 && osmLons.length >= 2) {
+          const on = Math.min(osmLats.length, osmLons.length);
+          for (let i = 0; i < on; i++) {
+            const p = toScreen(osmLats[i], osmLons[i]);
+            osmXs.push(p.x); osmYs.push(p.y);
+          }
+        }
+
+        const gpsXs = [], gpsYs = [];
+        for (let i = 0; i < n; i++) {
+          const p = toScreen(lats[i], lons[i]);
+          gpsXs.push(p.x); gpsYs.push(p.y);
+        }
+
+        // OSM area polygons — filled track surface, drawn first (lowest layer)
+        if (osmAreas.length) {
+          octx.fillStyle = 'rgba(74,85,104,0.55)';
+          for (const area of osmAreas) {
+            const aLats = area.lats || [];
+            const aLons = area.lons || [];
+            const an = Math.min(aLats.length, aLons.length);
+            if (an < 3) continue;
+            octx.beginPath();
+            for (let i = 0; i < an; i++) {
+              const p = toScreen(aLats[i], aLons[i]);
+              if (i === 0) octx.moveTo(p.x, p.y); else octx.lineTo(p.x, p.y);
+            }
+            octx.closePath();
+            octx.fill();
+          }
+        }
+
+        // OSM road background — smoothed, drawn below GPS trace
+        if (osmXs.length >= 2) {
+          octx.lineCap  = 'round';
+          octx.lineJoin = 'round';
+          _strokeSmooth(octx, osmXs, osmYs, false);
+          octx.strokeStyle = '#4a5568';
+          octx.lineWidth   = Math.max(6, w * 0.045);
+          octx.stroke();
+
+          _strokeSmooth(octx, osmXs, osmYs, false);
+          octx.strokeStyle = '#2d3748';
+          octx.lineWidth   = Math.max(4, w * 0.028);
+          octx.stroke();
+        }
+
+        // Full track outline (outer) — smoothed closed circuit
+        octx.lineCap  = 'round';
+        octx.lineJoin = 'round';
+        _strokeSmooth(octx, gpsXs, gpsYs, true);
+        octx.strokeStyle = theme.map_track_outer || '#1a2a3a';
+        octx.lineWidth   = Math.max(4, w * 0.03);
+        octx.stroke();
+
+        // Full track inner
+        _strokeSmooth(octx, gpsXs, gpsYs, true);
+        octx.strokeStyle = theme.map_track_inner || '#2255aa';
+        octx.lineWidth   = Math.max(2, w * 0.015);
+        octx.stroke();
+
+        // Start marker
+        const pStart = toScreen(lats[0], lons[0]);
+        octx.beginPath();
+        octx.arc(pStart.x, pStart.y, Math.max(3, w * 0.02), 0, Math.PI * 2);
+        octx.fillStyle = theme.map_start || '#00ff88';
+        octx.fill();
+
+        // Store dot projection helper for this base (avoid recomputing bbox math)
+        base = { canvas: off, toScreen, n };
+        _c.circuit.set(key, base);
       }
     }
 
-    // OSM road background — smoothed, drawn below GPS trace
-    if (osmXs.length >= 2) {
-      ctx.lineCap  = 'round';
-      ctx.lineJoin = 'round';
-      _strokeSmooth(ctx, osmXs, osmYs, false);
-      ctx.strokeStyle = '#4a5568';
-      ctx.lineWidth   = Math.max(6, w * 0.045);
-      ctx.stroke();
-
-      _strokeSmooth(ctx, osmXs, osmYs, false);
-      ctx.strokeStyle = '#2d3748';
-      ctx.lineWidth   = Math.max(4, w * 0.028);
-      ctx.stroke();
-    }
-
-    // Full track outline (outer) — smoothed closed circuit
-    ctx.lineCap  = 'round';
-    ctx.lineJoin = 'round';
-    _strokeSmooth(ctx, gpsXs, gpsYs, true);
-    ctx.strokeStyle = theme.map_track_outer || '#1a2a3a';
-    ctx.lineWidth   = Math.max(4, w * 0.03);
-    ctx.stroke();
-
-    // Full track inner
-    _strokeSmooth(ctx, gpsXs, gpsYs, true);
-    ctx.strokeStyle = theme.map_track_inner || '#2255aa';
-    ctx.lineWidth   = Math.max(2, w * 0.015);
-    ctx.stroke();
-
-    // Start marker
-    const pStart = toScreen(lats[0], lons[0]);
-    ctx.beginPath();
-    ctx.arc(pStart.x, pStart.y, Math.max(3, w * 0.02), 0, Math.PI * 2);
-    ctx.fillStyle = theme.map_start || '#00ff88';
-    ctx.fill();
+    // Paint base
+    if (base?.canvas) ctx.drawImage(base.canvas, 0, 0);
 
     // Current position dot (prefer smooth GPS from telemetry over polyline vertex snap)
     const idx   = Math.max(0, Math.min(curIdx, n - 1));
-    const pDot  = useGpsDot ? toScreen(dotLat, dotLon) : toScreen(lats[idx], lons[idx]);
+    const toScreen = base?.toScreen;
+    const pDot  = toScreen
+      ? (useGpsDot ? toScreen(dotLat, dotLon) : toScreen(lats[idx], lons[idx]))
+      : { x: w * 0.5, y: h * 0.5 };
     const dotR  = Math.max(4, w * 0.025);
 
     ctx.beginPath();

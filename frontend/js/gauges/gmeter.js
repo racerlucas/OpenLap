@@ -1,7 +1,7 @@
 /**
  * gmeter.js — 2D G-force meter with fading trace.
  *
- * Mirrors styles/gauge_gmeter.py
+ * Editor Canvas preview; ``data`` keys match ``styles/gauge_gmeter.py`` / export.
  *
  * data keys: value (gx), value_gy, history_vals (gx list), history_gy,
  *            min_val, max_val

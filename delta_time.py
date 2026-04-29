@@ -19,6 +19,10 @@ profile degenerates.  In that case the function falls back to a direct
 time comparison: delta = current_elapsed - (current_elapsed / current_duration
 * reference_duration), which is zero at the start and reflects only the
 total-time difference at the end.
+
+**Preview vs export:** used from ``video_renderer`` and from
+``webview_api.compute_preview_delta`` / ``telemetry_algorithms`` — do not
+re-implement this logic in JavaScript.
 """
 
 from __future__ import annotations

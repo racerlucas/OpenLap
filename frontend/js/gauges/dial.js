@@ -1,7 +1,7 @@
 /**
  * dial.js — Circular arc gauge with needle.
  *
- * Mirrors styles/gauge_dial.py
+ * Editor Canvas preview; ``data`` keys match ``styles/gauge_dial.py`` / export.
  *
  * Arc spans 240° clockwise from 210° to 330° (bottom-left to bottom-right).
  * Symmetric: zero at top (90°).

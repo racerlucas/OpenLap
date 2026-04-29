@@ -6,6 +6,10 @@
  *
  * In dev mode (no pywebview), calls fall through to _mock stubs so the page
  * can still render without crashing.
+ *
+ * Preview vs export: RPC methods that load telemetry or compute deltas/map tracks
+ * must stay aligned with the Python export pipeline (see webview_api.py docstring).
+ * This file only transports JSON — no duplicate business logic here.
  */
 const API = (() => {
   // ── Raw call ─────────────────────────────────────────────────────────────────
@@ -49,6 +53,11 @@ const API = (() => {
         channel_styles: {},
         channel_labels: {},
         multi_channels: [],
+        gauge_colours: [
+          '#00d4ff', '#ff6b35', '#a8ff3e', '#ff3ea8',
+          '#ffd700', '#3ea8ff', '#ff3e3e', '#3effd7',
+          '#c084fc', '#fb923c',
+        ],
         channel_defaults: {},
       }),
       edit_session_info:       () => null,
@@ -72,6 +81,7 @@ const API = (() => {
       close_decode_session:     () => ({ ok: true }),
       decode_session_seek:      () => ({ ok: false, error: 'mock' }),
       decode_session_step:      () => ({ ok: false, error: 'mock' }),
+      debug_sync_seek:          () => ({ ok: true }),
       save_sessions_cache:      () => null,
       convert_xrk_session:       () => ({ ok: false, error: 'mock' }),
       assign_video:              () => null,
@@ -81,7 +91,7 @@ const API = (() => {
       cancel_racebox_download:       () => null,
       racebox_playwright_status:     () => ({ playwright: false, chromium: false }),
       install_playwright_chromium:   () => null,
-      start_auto_sync:               () => ({ queued: 0 }),
+      start_auto_sync:               () => ({ queued: 0, reason: 'mock' }),
       cancel_auto_sync:              () => null,
       auto_split_laps_from_json:     () => ({ processed: [], skipped: [] }),
       auto_split_lap_for_file:       () => ({ processed: [], skipped: [] }),
@@ -158,6 +168,7 @@ const API = (() => {
     closeDecodeSession:  (sessionId) => call('close_decode_session', sessionId),
     decodeSessionSeek:   (sessionId, frameIdx, timeSec) => call('decode_session_seek', sessionId, frameIdx, timeSec),
     decodeSessionStep:   (sessionId, direction) => call('decode_session_step', sessionId, direction),
+    debugSyncSeek:       (tag, details) => call('debug_sync_seek', tag, details || {}),
     saveSessionsCache:   (sessions)     => call('save_sessions_cache', sessions),
 
     raceboxLogin:      (email, password) => call('racebox_login', email, password),
@@ -173,7 +184,8 @@ const API = (() => {
     raceboxPlaywrightStatus:    ()                   => call('racebox_playwright_status'),
     installPlaywrightChromium:  ()                   => call('install_playwright_chromium'),
 
-    startAutoSync:              (sessions)           => call('start_auto_sync', sessions),
+    startAutoSync:              (sessions, opts = {}) =>
+      call('start_auto_sync', sessions, !!opts?.force),
     cancelAutoSync:             ()                   => call('cancel_auto_sync'),
     autoSplitLapsFromJson:      (jsonPath, inputDir, outputDir) => call('auto_split_laps_from_json', jsonPath, inputDir, outputDir),
     autoSplitLapForFile:        (jsonPath, telemetryPath) => call('auto_split_lap_for_file', jsonPath, telemetryPath),

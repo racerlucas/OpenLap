@@ -1,7 +1,11 @@
-# overlay_themes.py — Colour palettes for gauge and map overlay styles.
+# overlay_themes.py — Colour palettes for matplotlib export overlay styles.
 """
 Each theme dict is injected into render data as '_tc' by style_registry.render_style().
 Style plugins read colours via:  T = data.get('_tc', {})
+
+The overlay *editor* uses ``frontend/js/gauges/base.js`` THEMES for a similar look;
+those CSS-style tokens are not required to match this file pixel-for-pixel — only
+telemetry-driven numbers must match between preview and export.
 """
 from __future__ import annotations
 

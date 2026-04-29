@@ -123,3 +123,17 @@ def test_from_dict_empty():
     cfg = _from_dict({})
     assert cfg.telemetry_path == ""
     assert isinstance(cfg.overlay, OverlayLayout)
+
+
+def test_from_dict_auto_sync_workers_defaults_and_clamps():
+    assert _from_dict({}).auto_sync_workers == 2
+    assert _from_dict({'auto_sync_workers': 99}).auto_sync_workers == 8
+    assert _from_dict({'auto_sync_workers': 0}).auto_sync_workers == 1
+
+
+def test_default_auto_sync_workers():
+    assert AppConfig().auto_sync_workers == 2
+
+
+def test_default_auto_sync_use_motion_false():
+    assert AppConfig().auto_sync_use_motion is False

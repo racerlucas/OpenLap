@@ -1,7 +1,7 @@
 /**
  * scoreboard.js — Lap scoreboard panel.
  *
- * Mirrors styles/gauge_lap_scoreboard.py
+ * Editor Canvas preview; ``data`` keys match ``styles/gauge_lap_scoreboard.py`` / export.
  *
  * data keys: lap_num, total_laps, lap_elapsed, best_so_far (number | null)
  * theme keys: bg, bgEdge, text, label, fillPos, fillLo, fillHi

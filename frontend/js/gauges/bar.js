@@ -1,7 +1,7 @@
 /**
  * bar.js — Horizontal fill bar gauge with sparkline.
  *
- * Mirrors styles/gauge_bar.py
+ * Editor Canvas preview; ``data`` keys match ``styles/gauge_bar.py`` / export.
  *
  * data keys: value, history_vals, label, unit, min_val, max_val, symmetric
  * theme keys: bg, bgEdge, track, fillPos, fillNeg, fillLo, fillHi, label, trace

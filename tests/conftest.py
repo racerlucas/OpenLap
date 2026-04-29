@@ -7,6 +7,10 @@ import pytest
 # Ensure the project root is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from opencv_ffmpeg_env import apply_ffmpeg_capture_thread_limit
+
+apply_ffmpeg_capture_thread_limit()
+
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 

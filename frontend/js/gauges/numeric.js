@@ -1,7 +1,7 @@
 /**
  * numeric.js — Numeric gauge: large centred value with label and unit.
  *
- * Mirrors styles/gauge_numeric.py
+ * Editor Canvas preview; ``data`` keys match ``styles/gauge_numeric.py`` / export.
  *
  * data keys: value, label, unit, channel
  * theme keys: bg, bgEdge, text, label (colour), unit (colour)

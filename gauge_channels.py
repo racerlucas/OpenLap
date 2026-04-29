@@ -1,5 +1,13 @@
 # gauge_channels.py — Metadata for all renderable gauge channels
 # Imported by styles, overlay_worker, and the UI.
+#
+# Preview/export data contract
+# -----------------------------
+# Export builds per-frame ``data`` via ``gauge_channels.gauge_data`` +
+# ``telemetry_algorithms.build_history_row``. The overlay editor must consume the
+# same channel keys / hist_key / limits (``get_channel_meta``, ``get_editor_catalog``)
+# so preview numbers match export. Canvas vs matplotlib *layout* is not unified —
+# only the semantic fields feeding gauges.
 from __future__ import annotations
 
 MULTI_CHANNEL = 'multi'   # pseudo-channel: combines multiple real channels

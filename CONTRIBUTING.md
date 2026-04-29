@@ -40,14 +40,14 @@ styles/               Python/matplotlib renderers — one per gauge style
 tests/                pytest (Python) + Vitest (JS in frontend/tests/)
 ```
 
-The two rendering stacks (`styles/*.py` and `frontend/js/gauges/*.js`) must stay in sync. When you change a gauge style, update both.
+Preview (JS Canvas) and export (matplotlib) are **separate presentation stacks**. They should agree on **what data** each gauge reads (`gauge_channels`, `build_history_row`, `telemetry_algorithms`) — not on identical pixels. When you add a style, add the export plugin; add or adjust the Canvas renderer only if the editor needs to preview it.
 
 ## Adding a gauge style
 
-1. Copy `styles/gauge_numeric.py` → `styles/gauge_myname.py`. Set `STYLE_NAME` and implement `render(data, w, h) -> np.ndarray`.
-2. Copy `frontend/js/gauges/numeric.js` → `frontend/js/gauges/myname.js`. Implement `GaugeMyname.render(ctx, data, w, h)`.
-3. Register the JS renderer in `frontend/js/gauges/registry.js` (or wherever the import map lives).
-4. The Python plugin is auto-discovered by `style_registry.py` — no registration needed.
+1. Copy `styles/gauge_numeric.py` → `styles/gauge_myname.py`. Set `STYLE_NAME` and implement `render(data, w, h) -> np.ndarray` (export path).
+2. Optionally copy `frontend/js/gauges/numeric.js` → `frontend/js/gauges/myname.js` for editor preview; wire it in `frontend/js/pages/editor.js` (`GAUGE_RENDERERS`).
+3. The Python plugin is auto-discovered by `style_registry.py` — no registration needed.
+4. Ensure any new **history keys** / `gauge_data` fields are documented and match what `load_preview_history` / `build_history_row` emit.
 
 ## Adding a telemetry channel
 

@@ -1,18 +1,26 @@
 /**
- * multiline.js — Multi-channel overlaid line chart with legend.
+ * multiline.js — Multi-channel overlaid line chart with legend (editor preview).
  *
- * Mirrors styles/gauge_multiline.py
+ * ``data.multi_channels`` matches export; ``data.palette`` is optional and should
+ * list the same hex sequence as ``gauge_channels.GAUGE_COLOURS`` when provided by
+ * the editor (``get_editor_catalog``).
  *
- * data keys: multi_channels (list of {channel, label, unit, values, value, min_val, max_val, symmetric, color_idx})
+ * data keys: multi_channels (…), optional palette (string[])
  */
 
-const GAUGE_COLOURS = [
+const _DEFAULT_LINE_PALETTE = [
   '#00d4ff', '#ff6b35', '#a8ff3e', '#ff3ea8',
   '#ffd700', '#3ea8ff', '#ff3e3e', '#3effd7',
   '#c084fc', '#fb923c',
 ];
 
-function _multilineColour(entry) {
+function _linePalette(data) {
+  const p = data?.palette;
+  if (Array.isArray(p) && p.length) return p;
+  return _DEFAULT_LINE_PALETTE;
+}
+
+function _multilineColour(entry, palette) {
   if (entry.channel === 'delta_time') {
     const v = entry.value ?? 0;
     if (v <= -0.10) return '#c084fc';
@@ -20,13 +28,15 @@ function _multilineColour(entry) {
     if (v <   1.00) return '#ffd700';
     return '#ff4444';
   }
-  return GAUGE_COLOURS[(entry.color_idx || 0) % GAUGE_COLOURS.length];
+  const pal = palette || _DEFAULT_LINE_PALETTE;
+  return pal[(entry.color_idx || 0) % pal.length];
 }
 
 const GaugeMultiline = {
   render(ctx, data, w, h) {
     const theme   = GaugeBase.getTheme(data.theme || 'Dark');
     const entries = (data.multi_channels || []).filter(e => e != null);
+    const palette = _linePalette(data);
 
     GaugeBase.drawBackground(ctx, w, h, theme);
 
@@ -77,7 +87,7 @@ const GaugeMultiline = {
       const mn   = entry.min_val ?? 0;
       const mx   = entry.max_val ?? 1;
       const sym  = entry.symmetric ?? false;
-      const colour = _multilineColour(entry);
+      const colour = _multilineColour(entry, palette);
       const rng  = mx !== mn ? mx - mn : 1;
 
       if (vals.length < 2) continue;
@@ -139,7 +149,7 @@ const GaugeMultiline = {
 
     for (let i = 0; i < entries.length; i++) {
       const entry  = entries[i];
-      const colour = _multilineColour(entry);
+      const colour = _multilineColour(entry, palette);
       const label  = (entry.label || '').slice(0, 6).toUpperCase();
       const unit   = entry.unit || '';
       const value  = entry.value ?? 0;

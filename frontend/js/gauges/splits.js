@@ -1,7 +1,7 @@
 /**
  * splits.js — Sector split comparison table.
  *
- * Mirrors styles/gauge_splits.py
+ * Editor Canvas preview; ``data`` keys match ``styles/gauge_splits.py`` / export.
  *
  * data keys: value (cur elapsed), sectors (list of {num, ref_t, cur_t, delta, done, boundary_elapsed})
  * theme keys: bg, bgEdge, label, text

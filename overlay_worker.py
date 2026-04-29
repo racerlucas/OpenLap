@@ -1,8 +1,13 @@
 """
-overlay_worker.py — Overlay rendering entry point
-===================================================
-Rendering is delegated to style plugins in styles/.
-This module owns blend_rgba, default_layout, and the multiprocessing worker.
+overlay_worker.py — Overlay rendering entry point (export frames)
+==================================================================
+Rendering is delegated to style plugins in ``styles/``. This module owns
+blend_rgba, default_layout, and the multiprocessing worker.
+
+**Data:** ``gauge_channels.gauge_data`` + history rows from the same pipeline as
+preview (see ``telemetry_algorithms`` / ``webview_api``). **Presentation:**
+matplotlib styles are independent of ``frontend/js/gauges/*.js`` — match *keys*
+and numeric values, not pixel layout.
 """
 from __future__ import annotations
 import logging

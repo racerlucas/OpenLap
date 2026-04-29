@@ -1,13 +1,13 @@
 /**
  * editor.js — Overlay Editor page.
  *
- * Architecture:
- *   - Left panel: gauge list + Add Gauge button
- *   - Right panel: 16:9 preview canvas with per-gauge sub-canvases
- *   - Gauges are positioned as absolutely-placed <canvas> elements
- *     on top of the preview area
- *   - Drag/resize handled via mouse events on a transparent overlay
- *   - Live Canvas renders using gauges/base.js + individual gauge modules
+ * Layout / drag / RAF / video UI are **frontend-only**. Anything that affects whether
+ * preview **numbers** match export must come from Python: ``get_channel_meta``,
+ * ``get_editor_catalog``, ``load_preview_history``, ``compute_preview_delta``,
+ * ``get_preview_map_tracks`` — same pipeline as ``video_renderer`` / ``telemetry_algorithms``.
+ *
+ * Canvas gauge modules are **presentation**; they consume the same ``data`` keys as
+ * export styles where applicable, but need not match matplotlib pixel-for-pixel.
  */
 (function () {
   // ── Registry: maps style name → render function ────────────────────────────
@@ -31,7 +31,7 @@
     'Image':      (ctx, d, w, h) => GaugeImage.render(ctx, d, w, h),
   };
 
-  // ── Channel → valid styles map (mirrors gauge_channels.py) ─────────────────
+  // Bootstrap map; replaced on load by ``get_editor_catalog`` from ``gauge_channels``.
   let _CHANNEL_STYLES = {
     speed:       ['Dial', 'Bar', 'Numeric', 'Line', 'Compare'],
     rpm:         ['Numeric', 'Bar', 'Dial', 'Line'],
@@ -89,11 +89,14 @@
     { value: 'delta_time',   label: '实时秒差' },
   ];
 
-  const GAUGE_COLOURS_LIST = [
-    '#00d4ff','#ff6b35','#a8ff3e','#ff3ea8',
-    '#ffd700','#3ea8ff','#ff3e3e','#3effd7',
-    '#c084fc','#fb923c',
-  ];
+  /** Multi-line / UI swatches — filled from ``get_editor_catalog().gauge_colours`` (``gauge_channels.GAUGE_COLOURS``). */
+  let _gaugeColours = [];
+
+  function _gaugeColourAt(i) {
+    const arr = _gaugeColours.length ? _gaugeColours : ['#888888'];
+    const n = arr.length;
+    return arr[((Math.floor(i) % n) + n) % n];
+  }
 
   // ── Utilities ─────────────────────────────────────────────────────────────
   function _esc(s) {
@@ -124,6 +127,10 @@
   let _livePort        = 0;
   let _liveRafId       = null;
   let _liveCumDist     = null;  // cumulative distance array for current lap points
+  // In-memory cache for preview telemetry points per lapIdx to avoid reloading
+  // on every lap jump (switchLap always calls _loadLapData).
+  // lapIdx -> [{t, speed, gx, gy, rpm, alt, lat, lon, lean}, ...]
+  let _lapHistoryCache = new Map();
   let _refLapPoints    = null;  // cached reference lap telemetry points
   let _refCumDist      = null;  // cumulative distance for reference lap
   let _refKey          = '';    // cache key: csv|lap_num|mode
@@ -341,6 +348,9 @@
     if (catalog?.channel_defaults && typeof catalog.channel_defaults === 'object') {
       _channelDefaultsMap = { ..._channelDefaultsMap, ...catalog.channel_defaults };
     }
+    if (Array.isArray(catalog?.gauge_colours) && catalog.gauge_colours.length) {
+      _gaugeColours = catalog.gauge_colours.map(x => String(x));
+    }
   }
 
   function _stylesForChannel(channel) {
@@ -490,7 +500,7 @@
           min_val:   m.min, max_val: m.max, symmetric: m.sym, color_idx: ci,
         };
       });
-      return { theme, multi_channels };
+      return { theme, multi_channels, palette: _gaugeColours };
     }
     if (channel === 'info') {
       const ov   = gauge?.info_overrides || {};
@@ -871,6 +881,38 @@
     _updateDeltaAtFrame(_liveFrameIdx);
   }
 
+  /**
+   * Best-effort seek video to the chosen lap start (sync_offset + lap.elapsed_start).
+   * We set `currentTime` immediately and re-apply once `loadedmetadata` fires,
+   * so entering editor / jumping laps doesn't wait for a late seek.
+   */
+  function _seekVideoToLapStart(lapIdx) {
+    const vid = _liveVideo();
+    if (!vid) return;
+    const lap = _liveLaps?.[lapIdx];
+    if (!lap) return;
+    const seekTo = (Number(_liveOffset) || 0) + (Number(lap.elapsed_start) || 0);
+
+    const apply = () => {
+      try {
+        const dur = Number(vid.duration);
+        const clamped = dur > 0 && Number.isFinite(dur)
+          ? Math.max(0, Math.min(dur, seekTo))
+          : Math.max(0, seekTo);
+        vid.currentTime = clamped;
+        const scrub = _container?.querySelector('#live-scrub');
+        if (scrub) scrub.value = String(Math.round(clamped * 1000));
+      } catch (_) { /* ignore */ }
+    };
+
+    apply();
+
+    const ready = vid.readyState >= 1 && Number.isFinite(Number(vid.duration)) && Number(vid.duration) > 0;
+    if (!ready) {
+      try { vid.addEventListener('loadedmetadata', apply, { once: true }); } catch (_) {}
+    }
+  }
+
   function _findFrameIdx(telT) {
     const pts = _livePoints;
     if (!pts || !pts.length) return 0;
@@ -937,8 +979,7 @@
     function tick() {
       const vid = _liveVideo();
       if (vid && _livePoints) {
-        // sess_elapsed = vid_t - sync_offset  (mirrors video_renderer.py)
-        // lap_elapsed  = sess_elapsed - lap.elapsed_start
+        // Session timeline: same base as export — sess_t = vid_t - sync_offset, then minus lap start.
         const lapStart = _liveLaps?.[_selLapIdx]?.elapsed_start ?? 0;
         const telT     = vid.currentTime - _liveOffset - lapStart;
         const newIdx   = _findFrameIdx(telT);
@@ -1028,14 +1069,9 @@
       vid.addEventListener('loadedmetadata', () => {
         if (scrub) scrub.max = Math.round(vid.duration * 1000);
         _applyAspect();
-        // Seek to the currently selected lap's start position.
-        // (vid_t = sync_offset + lap.elapsed_start)
-        if (_liveLaps?.[_selLapIdx] != null) {
-          const lap = _liveLaps[_selLapIdx];
-          const seekTo = _liveOffset + (lap.elapsed_start || 0);
-          vid.currentTime = Math.max(0, Math.min(vid.duration, seekTo));
-          if (scrub) scrub.value = Math.round(vid.currentTime * 1000);
-        }
+        // Do not force-seek on entering editor: start from the video's beginning.
+        // Gauge/telemetry alignment will catch up via timeupdate + _syncPreviewFrameToVideo.
+        if (scrub) scrub.value = Math.round(vid.currentTime * 1000);
       });
 
       // Metadata may already be available if the browser cached it from a previous
@@ -1043,13 +1079,8 @@
       if (vid.readyState >= 1) {
         _applyAspect();
         if (scrub && vid.duration) scrub.max = Math.round(vid.duration * 1000);
-        // Seek to current lap start (critical on fast remount with cached video)
-        if (_liveLaps?.[_selLapIdx] != null && vid.duration) {
-          const lap    = _liveLaps[_selLapIdx];
-          const seekTo = _liveOffset + (lap.elapsed_start || 0);
-          vid.currentTime = Math.max(0, Math.min(vid.duration, seekTo));
-          if (scrub) scrub.value = Math.round(vid.currentTime * 1000);
-        }
+        // Do not force-seek on fast remount; keep video at its natural start position.
+        if (scrub) scrub.value = Math.round(vid.currentTime * 1000);
       }
       vid.addEventListener('timeupdate', () => {
         if (scrub && !vid.seeking) scrub.value = Math.round(vid.currentTime * 1000);
@@ -1068,8 +1099,20 @@
       vid.addEventListener('pause', () => { if (playBtn) playBtn.textContent = '▶'; });
     }
 
+    const safePlay = (v) => {
+      if (!v || !v.isConnected) return;
+      try {
+        const p = v.play();
+        if (p && typeof p.catch === 'function') p.catch(() => {});
+      } catch (_) { /* ignore */ }
+    };
+
     playBtn?.addEventListener('click', () => {
-      if (vid) vid.paused ? vid.play() : vid.pause();
+      if (!vid) return;
+      if (vid.paused) safePlay(vid);
+      else {
+        try { vid.pause(); } catch (_) { /* ignore */ }
+      }
     });
 
     scrub?.addEventListener('input', e => {
@@ -1120,9 +1163,25 @@
     // Only zero scrub for telemetry-only preview. With video, scrub tracks
     // vid.currentTime — resetting to 0 fights switchLap's seek and desyncs delta.
     const vidEarly = _liveVideo();
-    if (scrub && (!vidEarly || !vidEarly.duration)) scrub.value = 0;
+    const hasVid = !!(vidEarly && (vidEarly.currentSrc || vidEarly.src));
+    if (scrub && (!vidEarly || (!vidEarly.duration && !hasVid))) scrub.value = 0;
 
     try {
+      // If the same lap is jumped to again, reuse cached telemetry points.
+      // switchLap always calls _loadLapData, so without this we'd repeatedly hit
+      // Python for loadPreviewHistory().
+      const cached = _lapHistoryCache.get(lapIdx);
+      if (cached && Array.isArray(cached)) {
+        _livePoints = cached;
+        _liveLats   = _livePoints.map(p => p.lat);
+        _liveLons   = _livePoints.map(p => p.lon);
+        _liveCumDist = _buildCumDist(_livePoints);
+        _liveSpeedMax = _computeSpeedMax(_livePoints, _lapBoundaryIdx());
+        await _loadRefLapIfNeeded();
+        await _syncPreviewMapTracks();
+        await _recomputeDeltaSeries();
+        _syncPreviewFrameToVideo();
+      } else {
       const pts = await API.loadPreviewHistory(_liveSession.csv_path, lapIdx);
       if (mountGen !== undefined && _mountGen !== mountGen) return;  // stale
 
@@ -1145,11 +1204,14 @@
       await _recomputeDeltaSeries();
       _syncPreviewFrameToVideo();
 
-      if (labelEl) labelEl.textContent = `${_livePoints.length} samples · lap ${lapIdx + 1}`;
+      if (labelEl) labelEl.textContent = `${_livePoints?.length || 0} samples · lap ${lapIdx + 1}`;
+      // Store base telemetry points for reuse on future lap jumps.
+      if (_livePoints && Array.isArray(_livePoints)) _lapHistoryCache.set(lapIdx, _livePoints);
+      }
 
       // If no video, set scrub range from telemetry time span
       const vid = _liveVideo();
-      if ((!vid || !vid.duration) && scrub && _livePoints.length) {
+      if ((!vid || !vid.duration) && scrub && (_livePoints?.length || 0)) {
         const endT = _timeKey(_livePoints[_livePoints.length - 1]);
         scrub.max = Math.round(endT * 1000);
       } else if (vid && scrub && vid.duration) {
@@ -1178,15 +1240,18 @@
     _selLapIdx = lapIdx;
     _stopLiveRaf();
 
-    // Seek video to lap start: vid_t = sync_offset + lap.elapsed_start
-    const vid = _liveVideo();
-    if (vid && vid.readyState >= 1 && vid.duration) {
-      const lap    = _liveLaps[lapIdx];
-      const seekTo = _liveOffset + (lap.elapsed_start || 0);
-      vid.currentTime = Math.max(0, Math.min(vid.duration, seekTo));
-      const scrub = _container?.querySelector('#live-scrub');
-      if (scrub) scrub.value = Math.round(vid.currentTime * 1000);
-    }
+    // Offset may have changed on Data tab (saved or preview-temp). Refresh before seeking.
+    try {
+      const ps = State.get('previewSession');
+      const off = ps?.sync_offset ?? _liveSession?.sync_offset;
+      if (off != null && Number.isFinite(Number(off))) {
+        _liveOffset = Number(off);
+        if (_liveSession) _liveSession.sync_offset = Number(off);
+      }
+    } catch (_) {}
+
+    // Seek video immediately (best-effort) so jumping laps doesn't wait for metadata.
+    _seekVideoToLapStart(lapIdx);
 
     // Keep State in sync so Export page sees the right lap
     State.set('previewSession', {
@@ -1247,22 +1312,22 @@
     _liveSession = session;
     _liveOffset  = session.sync_offset ?? 0;
     _trackMapGeometry = null;
+    _lapHistoryCache = new Map();
 
     // Fetch metadata and lap list in parallel — no track-map call here so these
     // are never blocked by a slow session-file reload on the Python side.
-    const [meta, laps, channelMeta, editorCatalog] = await Promise.all([
+    const [meta, laps, channelMeta] = await Promise.all([
       API.getSessionMeta(session.csv_path).catch(() => ({})),
       API.getLaps(session.csv_path).catch(() => []),
       API.getChannelMeta().catch(() => ({})),
-      API.getEditorCatalog().catch(() => ({})),
     ]);
     if (_mountGen !== myGen) return;  // navigated away while awaiting
 
     _liveSessionMeta = meta;
     _liveLaps        = Array.isArray(laps) ? laps : [];
     _applyChannelMeta(channelMeta);
-    _applyEditorCatalog(editorCatalog);
-    // Default to the lap requested, but skip the outlap — start on the first timed lap.
+    // Default to the first lap in list (including outlap) so entering editor
+    // starts from the beginning of the video timeline.
     const lapList = _liveLaps;
     let startIdx = session.lap_idx ?? 0;
     if (lapList.length) {
@@ -1270,22 +1335,9 @@
     } else {
       startIdx = 0;
     }
-    if (lapList[startIdx]?.is_outlap || lapList[startIdx]?.is_inlap) {
-      const timedIdx = lapList.findIndex(l => !l.is_outlap && !l.is_inlap);
-      if (timedIdx >= 0) startIdx = timedIdx;
-    }
     _selLapIdx = startIdx;
 
-    // Seek video to the initial lap's start position if video is already loaded.
-    // (vid_t = sync_offset + lap.elapsed_start — same formula as switchLap)
-    const vid = _liveVideo();
-    if (vid && lapList.length && vid.readyState >= 1 && vid.duration) {
-      const lap    = lapList[_selLapIdx] || lapList[0];
-      const seekTo = _liveOffset + (lap.elapsed_start || 0);
-      vid.currentTime = Math.max(0, Math.min(vid.duration, seekTo));
-      const scrub = _container?.querySelector('#live-scrub');
-      if (scrub) scrub.value = Math.round(vid.currentTime * 1000);
-    }
+    // Start from the video beginning by default (no forced seek here).
 
     _updateLapSelector();
     await _loadLapData(_selLapIdx, myGen);
@@ -1384,9 +1436,8 @@
         box-sizing: border-box;
         z-index: 2;
       `;
-      canvas.style.outline = (idx === _selected)
-        ? '2px solid var(--acc)'
-        : '1px solid rgba(255,255,255,0.1)';
+      // WYSIWYG: no canvas outline — export frames have no editor chrome; selection is only in the list.
+      canvas.style.outline = 'none';
 
       area.appendChild(canvas);
       renderGaugeEl(canvas, g);
@@ -1404,10 +1455,10 @@
         left: ${(g.x + g.w) * 100}%;
         top: ${(g.y + g.h) * 100}%;
         transform: translate(-50%, -50%);
-        width: 12px;
-        height: 12px;
-        background: var(--acc);
-        border: 2px solid white;
+        width: 10px;
+        height: 10px;
+        background: rgba(79,142,247,0.55);
+        border: 1px solid rgba(255,255,255,0.35);
         border-radius: 2px;
         cursor: se-resize;
         z-index: 10;
@@ -1829,7 +1880,7 @@
               const lbl = _MULTI_CHANNEL_OPTS.find(o => o.value === ch)?.label || ch;
               return `<div style="display:flex;align-items:center;gap:4px;margin-bottom:4px;">
                 <div style="width:10px;height:10px;border-radius:2px;flex-shrink:0;
-                            background:${GAUGE_COLOURS_LIST[i % GAUGE_COLOURS_LIST.length]}"></div>
+                            background:${_gaugeColourAt(i)}"></div>
                 <span style="flex:1;font-size:10px;color:var(--text)">${lbl}</span>
                 <button class="btn btn-sm multi-rm-btn" data-mch="${ch}"
                         style="padding:1px 6px;color:var(--err);border-color:var(--err);">✕</button>
@@ -2121,7 +2172,7 @@
           const lbl = _MULTI_CHANNEL_OPTS.find(o => o.value === ch)?.label || ch;
           return `<div style="display:flex;align-items:center;gap:4px;margin-bottom:4px;">
             <div style="width:10px;height:10px;border-radius:2px;flex-shrink:0;
-                        background:${GAUGE_COLOURS_LIST[i % GAUGE_COLOURS_LIST.length]}"></div>
+                        background:${_gaugeColourAt(i)}"></div>
             <span style="flex:1;font-size:10px;color:var(--text)">${lbl}</span>
             <button class="btn btn-sm multi-rm-btn" data-mch="${ch}"
                     style="padding:1px 6px;color:var(--err);border-color:var(--err);">✕</button>
@@ -2288,7 +2339,7 @@
 
     list.innerHTML = _layout.gauges.map((g, idx) => {
       const ch      = _ALL_CHANNELS.find(c => c.value === g.channel)?.label || g.channel;
-      const col     = GAUGE_COLOURS_LIST[idx % GAUGE_COLOURS_LIST.length];
+      const col     = _gaugeColourAt(idx);
       const visible = g.visible !== false;
       return `
         <div class="gauge-list-item ${idx === _selected ? 'selected' : ''}"
@@ -2406,12 +2457,16 @@
     _container = container;
     _selected  = null;
 
-    // ── Resolve video src BEFORE rendering HTML (mirrors data page approach) ──
+    // Resolve video URL early (same pattern as Data tab — presentation only).
     const prevSession = State.get('previewSession');
     // Only fetch port once — the server never changes address, and re-calling on fast
     // re-navigation can fail/reject and zero out _livePort, hiding the video element.
     if (!_livePort) _livePort = await API.getVideoServerPort().catch(() => 0);
     if (_mountGen !== myGen) return;  // navigated away while awaiting port
+
+    const catEarly = await API.getEditorCatalog().catch(() => ({}));
+    if (_mountGen !== myGen) return;
+    _applyEditorCatalog(catEarly);
 
     // Fast-remount path: if the same session is already loaded in memory, skip all
     // Python API calls (getOverlay, listPresets, getSessionMeta, getLaps, loadLapHistory).

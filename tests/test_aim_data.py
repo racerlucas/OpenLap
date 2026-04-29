@@ -77,7 +77,7 @@ def test_is_aim_csv_nonexistent():
 
 def test_load_csv_source(aim_csv_path):
     session = load_csv(aim_csv_path)
-    assert session.source == 'AIM Mychron'
+    assert session.source == 'AIM'
 
 
 def test_load_csv_has_points(aim_csv_path):

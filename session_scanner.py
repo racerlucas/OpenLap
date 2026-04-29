@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 from utils import _run
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Callable, List, Optional, Dict, Tuple  # noqa: F401 – Tuple used in scan_pending_xrk
 
@@ -118,10 +118,18 @@ def scan_videos(folder: str, progress_cb: Optional[Callable[[str], None]] = None
             progress_cb(f"Reading video metadata… ({i}/{total})  {os.path.basename(path)}")
         ct, dur = _ffprobe_creation_time(path)
         if ct is None:
-            # User requested metadata-based matching; skip files without valid
-            # creation_time metadata instead of falling back to filesystem time.
-            logger.warning('Video metadata missing creation_time, skipped: %s', path)
-            continue
+            # Fallback: many cameras don't write creation_time reliably.
+            # Use filesystem mtime (UTC) and back-project by duration so the
+            # derived start time aligns with "record started" better than raw mtime.
+            mtime = os.path.getmtime(path)
+            ct = datetime.fromtimestamp(mtime, tz=timezone.utc)
+            try:
+                from datetime import timedelta
+                if dur and dur > 0:
+                    ct = ct - timedelta(seconds=float(dur))
+            except Exception:
+                pass
+            logger.info('Video metadata missing creation_time, fallback to mtime: %s', path)
         results.append(VideoFile(path=path, creation_time=ct, duration=dur))
     results.sort(key=lambda v: v.sort_key)
     return results
@@ -259,7 +267,7 @@ def convert_xrk_files(folder: str, progress_cb: Optional[Callable[[str], None]] 
 # ── CSV scanning ───────────────────────────────────────────────────────────────
 
 def scan_csvs(folder: str) -> List[str]:
-    """Recursively find all RaceBox, AIM Mychron CSV, GPX, MoTeC .ld, and VBOX .vbo files."""
+    """Recursively find all RaceBox, AIM, GPX, MoTeC .ld, and VBOX .vbo files."""
     import motec_data as _motec
     results = []
     for root, _, files in os.walk(folder):
@@ -318,7 +326,7 @@ class MatchedSession:
     csv_start:        Optional[datetime]
     video_start:      Optional[datetime]
     matched:          bool             # True if within MATCH_WINDOW
-    source:           str  = 'RaceBox' # 'RaceBox' | 'AIM Mychron'
+    source:           str  = 'RaceBox' # 'RaceBox' | 'AIM'
     needs_conversion: bool = False     # True for XRK files not yet converted to CSV
     xrk_path:         Optional[str] = None  # source XRK path when needs_conversion=True
 
@@ -350,14 +358,16 @@ def _csv_source(path: str) -> str:
         with open(path, 'r', encoding='utf-8-sig', errors='ignore') as f:
             head = f.read(300)
         if head.startswith('Time (s),') or '\nTime (s),' in head:
-            return 'AIM Mychron'
+            return 'AIM'
     except Exception:
         pass
     return 'RaceBox'
 
 
-def match_sessions(csv_paths: List[str],
-                   video_groups: List[VideoGroup]) -> List[MatchedSession]:
+def match_sessions(
+    csv_paths: List[str],
+    video_groups: List[VideoGroup],
+) -> List[MatchedSession]:
     """
     Match each CSV to the closest video group by timestamp.
     Uses the Date UTC field from the CSV header.
@@ -413,7 +423,7 @@ def _read_csv_start_time(path: str) -> Optional[datetime]:
         try:
             import re as _re
             with open(path, 'r', encoding='utf-8-sig', errors='ignore') as f:
-                head = f.read(4096)
+                head = f.read(64 * 1024)
             m = _re.search(
                 r'file\s+created\s+(?:on|in)\s+(\d{2})/(\d{2})/(\d{4})(?:\s+at\s+(\d{2}):(\d{2}):(\d{2}))?',
                 head,
@@ -421,10 +431,42 @@ def _read_csv_start_time(path: str) -> Optional[datetime]:
             )
             if m:
                 day, month, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
-                hh = int(m.group(4) or 0)
-                mm = int(m.group(5) or 0)
-                ss = int(m.group(6) or 0)
-                return datetime(year, month, day, hh, mm, ss, tzinfo=timezone.utc)
+                # Prefer the first data row's HHMMSS.SS for sub-second precision.
+                # Many VBO exports store the header timestamp in local time, but the
+                # [data] time channel as UTC HHMMSS.SS. We treat [data] time as UTC,
+                # and choose the correct UTC date (±1 day) so it's closest to the
+                # header timestamp converted to UTC.
+                hdr_h = int(m.group(4) or 0)
+                hdr_m = int(m.group(5) or 0)
+                hdr_s = int(m.group(6) or 0)
+                hh, mm, ss, ms = hdr_h, hdr_m, hdr_s, 0
+                try:
+                    dm = _re.search(r'^\s*\[data\]\s*$(?:\r?\n)+([^\r\n]+)', head, flags=_re.IGNORECASE | _re.MULTILINE)
+                    if dm:
+                        cols = dm.group(1).split()
+                        if len(cols) >= 2:
+                            raw = float(cols[1])  # time column usually second token
+                            h2 = int(raw) // 10000
+                            m2 = (int(raw) // 100) % 100
+                            s2 = raw - h2 * 10000 - m2 * 100
+                            hh, mm, ss = int(h2), int(m2), int(s2)
+                            ms = int(round((s2 % 1) * 1000))
+                except Exception:
+                    pass
+
+                local_tz = datetime.now().astimezone().tzinfo or timezone.utc
+                header_local = datetime(year, month, day, hdr_h, hdr_m, hdr_s, tzinfo=local_tz)
+                header_utc = header_local.astimezone(timezone.utc)
+
+                base_date = datetime(year, month, day, tzinfo=timezone.utc)
+                candidates = []
+                for dday in (-1, 0, 1):
+                    dt = (base_date + timedelta(days=dday)).replace(
+                        hour=hh, minute=mm, second=ss, microsecond=ms * 1000
+                    )
+                    candidates.append(dt)
+                best = min(candidates, key=lambda dt: abs((dt - header_utc).total_seconds()))
+                return best
         except Exception:
             logger.debug('Could not read VBOX start time from %s', path, exc_info=True)
         return None

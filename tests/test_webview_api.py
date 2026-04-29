@@ -103,7 +103,7 @@ class TestThreadSafety:
     """
 
     def test_start_export_no_duplicate_threads(self, api):
-        """Calling start_export twice while running must not create a second thread."""
+        """Second start_export while the worker is busy must queue, not spawn a second worker."""
         barrier = threading.Event()
         started_count = []
 
@@ -115,13 +115,13 @@ class TestThreadSafety:
 
         api.start_export({'items': []})
         time.sleep(0.05)   # let the first thread start
-        api.start_export({'items': []})   # second call while first is alive
+        api.start_export({'items': []})   # second call while first is alive — queued
         barrier.set()
 
         if api._export_thread:
             api._export_thread.join(timeout=2)
 
-        assert len(started_count) == 1, "start_export must not spawn two threads"
+        assert len(started_count) == 2, "both export jobs must run sequentially on one worker"
 
     def test_cancel_export_sets_flag(self, api):
         api._export_cancel.clear()
@@ -156,6 +156,29 @@ def test_cached_sessions_prefers_manual_video_override(api, tmp_path):
     assert len(out) == 1
     assert out[0]["matched"] is True
     assert out[0]["video_paths"] == [str(Path(video_path).resolve())]
+
+
+def test_run_auto_sync_bg_invokes_all_sessions_with_parallel_workers(api, tmp_path):
+    """Parallel pool still processes every session when run_auto_sync is mocked."""
+    seen = []
+    lock = threading.Lock()
+
+    def fake_run(**kwargs):
+        with lock:
+            seen.append(kwargs['csv_path'])
+        time.sleep(0.01)
+        return None, 0.0
+
+    sessions = [
+        {'csv_path': str(tmp_path / 's1.csv'), 'video_paths': ['x.mp4'], 'source': 'VBOX'},
+        {'csv_path': str(tmp_path / 's2.csv'), 'video_paths': ['x.mp4'], 'source': 'VBOX'},
+        {'csv_path': str(tmp_path / 's3.csv'), 'video_paths': ['x.mp4'], 'source': 'VBOX'},
+    ]
+    api._config.auto_sync_workers = 3
+    with patch('auto_sync.run_auto_sync', side_effect=fake_run):
+        api._run_auto_sync_bg(sessions)
+    assert len(seen) == 3
+    assert set(seen) == {s['csv_path'] for s in sessions}
 
 
 def test_load_preview_history_covers_session_tail(api):

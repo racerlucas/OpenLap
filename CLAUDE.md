@@ -36,16 +36,16 @@ Two channels:
 
 Video playback uses a third channel: a local HTTP server (`_VideoFileHandler` in `webview_api.py`) on a random port that serves arbitrary local files with HTTP range support. JS gets the port via `get_video_server_port()` and builds URLs like `http://127.0.0.1:{port}/?f={encodedPath}`.
 
-### Dual rendering stacks
+### Preview (Canvas) vs export (matplotlib)
 
-Every gauge style exists **twice**:
-
-| Stack | Location | Used for |
+| Stack | Location | Role |
 |---|---|---|
-| JS Canvas renderers | `frontend/js/gauges/*.js` | Live preview in overlay editor |
-| Python/matplotlib plugins | `styles/*.py` | Video export frames |
+| JS Canvas | `frontend/js/gauges/*.js` | Overlay **editor preview** only |
+| Python/matplotlib | `styles/*.py` | **Exported** video frames |
 
-When adding or changing a gauge style, **both** must be updated to stay in sync. `base.js` and `overlay_utils.py` / `overlay_themes.py` define the shared drawing primitives and theme tokens — keep them consistent.
+**Unify:** telemetry inputs and calculations — same `Session` / `DataPoint` fields, `build_history_row` / `gauge_channels` keys, delta and map logic in `telemetry_algorithms.py`, sync offset, and RPC helpers in `webview_api.py` (`load_preview_history`, `compute_preview_delta`, …). Preview and export must not diverge on *numbers*.
+
+**Separate:** Canvas vs matplotlib *drawing* (layout, fonts, theme tokens). Reuse the same **data** contract; do **not** chase pixel-perfect parity between `base.js` and `overlay_utils.py` unless you want both for UX reasons.
 
 ### Python style plugins
 

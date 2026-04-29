@@ -4,6 +4,9 @@ data_model.py — Shared data types for OpenLap
 DataPoint, Lap, and Session live here so that all data loaders can import
 from a common module without creating circular dependencies through
 racebox_data.py.
+
+These types are the **unified data contract** for preview, export, and RPC:
+loaders must populate the same fields; UI must not invent parallel telemetry shapes.
 """
 from __future__ import annotations
 from dataclasses import dataclass

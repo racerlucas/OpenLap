@@ -1,7 +1,7 @@
 /**
  * sector_bar.js — Compact sector split strip.
  *
- * Mirrors styles/gauge_sector_bar.py
+ * Editor Canvas preview; ``data`` keys match ``styles/gauge_sector_bar.py`` / export.
  *
  * data keys: sectors (list of {num, delta, done})
  */

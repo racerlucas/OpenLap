@@ -3,6 +3,12 @@ video_renderer.py — Video rendering engine
 ===========================================
 Handles video joining (ffmpeg), frame rendering (multiprocessing),
 and final mux. No GUI state — all inputs passed explicitly.
+
+**Telemetry time base:** ``sess_t = vid_t - sync_offset`` then
+``session.interpolate_at(sess_t)`` — same session timeline as
+``load_preview_history`` / editor preview. Lap timer, delta, lap-info rows, and
+map geometry must use the same helpers as the preview RPC path
+(``telemetry_algorithms``); only video I/O and pixel compositing live here.
 """
 
 from __future__ import annotations

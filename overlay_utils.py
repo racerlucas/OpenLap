@@ -1,6 +1,9 @@
 """
-overlay_utils.py — Shared utilities for overlay style rendering.
-Imported by overlay_worker.py and all style files in styles/.
+overlay_utils.py — Shared utilities for matplotlib overlay export rendering.
+
+Used only by ``styles/*.py`` and ``overlay_worker`` (export). The editor preview
+uses ``frontend/js/gauges/base.js`` for analogous *visual* helpers — those are
+not required to match line-by-line; keep export math in ``telemetry_algorithms``.
 """
 from __future__ import annotations
 import math

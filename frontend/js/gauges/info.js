@@ -1,7 +1,7 @@
 /**
  * info.js — Session info panel gauge.
  *
- * Mirrors styles/gauge_info.py
+ * Editor Canvas preview; ``data`` keys match ``styles/gauge_info.py`` / export.
  *
  * data keys:
  *   selected_fields  — list of field keys to show (e.g. ['track','datetime','weather','wind'])

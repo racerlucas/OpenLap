@@ -143,15 +143,26 @@
     <!-- Auto Sync -->
     <section class="settings-section">
       <div class="section-title">自动同步</div>
-      <p class="section-hint">每次扫描后自动检测视频-遥测同步偏移。
-        Uses cross-correlation of G-force vs video motion (~20–60s per session).
-        Only runs on sessions with no existing offset. Results are shown as "auto"
-        in the Data tab — click Mark to confirm and promote to a user offset.</p>
+      <p class="section-hint">默认用<strong>文件时间码</strong>（遥测开始时间 vs 视频创建/流时间）估算偏移并吸附到视频帧，不做画面运动分析；卡丁头盔、防抖等场景更稳。无时间码时不会写偏移，请在数据页手动对齐。
+        可选开启「运动精细对齐」用 G 力与画面运动互相关（固定车载机位更合适，每节约数十秒解码）。仅对尚无偏移的节运行。</p>
       <div class="form-row">
         <label>扫描后启用自动同步</label>
         <label class="toggle-switch">
           <input type="checkbox" data-config-key="auto_sync_enabled"
                  ${cfg.auto_sync_enabled ? 'checked' : ''}>
+          <span class="toggle-thumb"></span>
+        </label>
+      </div>
+      <div class="form-row">
+        <label title="同时分析多节；调高会更快但更吃 CPU/磁盘。导出运行时仍会暂停自动同步。">自动同步并行数</label>
+        <input type="number" data-config-key="auto_sync_workers" class="input-field input-narrow"
+               value="${cfg.auto_sync_workers ?? 2}" min="1" max="8" step="1">
+      </div>
+      <div class="form-row">
+        <label title="解码视频并与 G 力曲线互相关；头盔/防抖画面易失败，默认关闭">启用运动精细对齐（车载固定机位）</label>
+        <label class="toggle-switch">
+          <input type="checkbox" data-config-key="auto_sync_use_motion"
+                 ${cfg.auto_sync_use_motion ? 'checked' : ''}>
           <span class="toggle-thumb"></span>
         </label>
       </div>
@@ -433,14 +444,19 @@
 
   async function _save(container) {
     const updated = { ..._config };
-    const _intKeys  = new Set(['crf', 'workers']);
+    const _intKeys  = new Set(['crf', 'workers', 'auto_sync_workers']);
     const _boolKeys = new Set(['auto_sync_enabled']);
     container.querySelectorAll('[data-config-key]').forEach(el => {
       const key = el.dataset.configKey;
       if (_boolKeys.has(key) || el.type === 'checkbox') {
         updated[key] = el.checked;
+      } else if (_intKeys.has(key)) {
+        let n = parseInt(el.value, 10);
+        if (!Number.isFinite(n)) n = key === 'auto_sync_workers' ? 2 : 0;
+        if (key === 'auto_sync_workers') n = Math.min(8, Math.max(1, n));
+        updated[key] = n;
       } else {
-        updated[key] = _intKeys.has(key) ? (parseInt(el.value, 10) || 0) : el.value.trim();
+        updated[key] = el.value.trim();
       }
     });
     // Persist email (never password — that goes through the login flow only)

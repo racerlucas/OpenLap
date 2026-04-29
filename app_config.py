@@ -80,6 +80,10 @@ class AppConfig:
     auto_sync_failed:  List[str]       = field(default_factory=list)
     # csv_paths where auto-sync was tried but confidence was too low
     auto_sync_enabled: bool            = False
+    auto_sync_workers: int            = 2
+    # how many sessions to auto-sync concurrently (1 = sequential)
+    auto_sync_use_motion: bool        = False
+    # False = file timestamps only (default; kart/helmet video). True = G-force vs motion refine.
     track_map_selections: Dict[str, str] = field(default_factory=dict)
     # track_name_lower → osm_way_id; controls which OSM way is used as circuit outline
     lap_flags: Dict[str, dict] = field(default_factory=dict)
@@ -261,6 +265,8 @@ def _from_dict(data: dict) -> AppConfig:
         offset_sources       = data.get('offset_sources',       {}),
         auto_sync_failed     = data.get('auto_sync_failed',     []),
         auto_sync_enabled    = bool(data.get('auto_sync_enabled', False)),
+        auto_sync_workers    = max(1, min(8, int(data.get('auto_sync_workers', 2) or 2))),
+        auto_sync_use_motion = bool(data.get('auto_sync_use_motion', False)),
         track_map_selections = data.get('track_map_selections', {}),
         lap_flags            = data.get('lap_flags', {}),
     )

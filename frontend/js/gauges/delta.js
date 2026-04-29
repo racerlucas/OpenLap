@@ -1,7 +1,7 @@
 /**
  * delta.js — Delta time gauge (current vs reference lap).
  *
- * Mirrors styles/gauge_delta.py
+ * Editor Canvas preview; ``data`` keys match ``styles/gauge_delta.py`` / export.
  *
  * data keys: value (delta_seconds), history_vals, label
  * theme keys: bg, bgEdge, label

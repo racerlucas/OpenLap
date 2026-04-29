@@ -10,6 +10,7 @@ from session_scanner import (
     match_sessions, MatchedSession,
     MAX_GAP, MATCH_WINDOW,
 )
+from pathlib import Path
 
 
 def _utc(year, month, day, hour=0, minute=0, second=0) -> datetime:
@@ -86,10 +87,71 @@ def test_read_csv_start_time_aim(aim_csv_path):
     assert dt.year == 2024
 
 
+def test_read_csv_start_time_vbo_has_subsecond():
+    p = Path(__file__).resolve().parent / "fixtures" / "sample.vbo"
+    # fixture may not include "File created on ..." header in all environments;
+    # build a minimal VBO inline to test sub-second parsing.
+    # (date from header + HHMMSS.SS from first data row)
+    from tempfile import NamedTemporaryFile
+    import os
+    with NamedTemporaryFile('w', delete=False, suffix='.vbo', encoding='utf-8') as f:
+        f.write("\n".join([
+            "File created on 25/04/2026 at 17:11:40",
+            "",
+            "[header]",
+            "time",
+            "",
+            "[column names]",
+            "sats time lat long",
+            "",
+            "[data]",
+            "016 091140.12 +0000.00000 +0000.00000",
+            "",
+        ]))
+        tmp = f.name
+    try:
+        dt = _read_csv_start_time(tmp)
+    finally:
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+    assert dt is not None
+    assert dt.tzinfo is not None
+    # first data row time ends with .12 → should preserve milliseconds
+    assert dt.microsecond != 0
+
+
+def test_read_csv_start_time_vbo_reconciles_header_local_vs_data_utc(tmp_path):
+    # Header uses local time (UTC+8) 17:11:40, data time channel uses 09:11:40.28 (UTC).
+    # We treat [data] time as UTC and pick the correct UTC date nearest header->UTC.
+    p = tmp_path / "x.vbo"
+    p.write_text(
+        "\n".join([
+            "File created on 25/04/2026 at 17:11:40",
+            "",
+            "[header]",
+            "time",
+            "",
+            "[column names]",
+            "sats time lat long",
+            "",
+            "[data]",
+            "016 091140.28 +0000.00000 +0000.00000",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    dt = _read_csv_start_time(str(p))
+    assert dt is not None
+    assert dt.tzinfo is not None
+    assert dt.isoformat().startswith("2026-04-25T09:11:40.280")
+
+
 # ── _csv_source ────────────────────────────────────────────────────────────────
 
 def test_csv_source_aim(aim_csv_path):
-    assert _csv_source(aim_csv_path) == 'AIM Mychron'
+    assert _csv_source(aim_csv_path) == 'AIM'
 
 
 def test_csv_source_racebox(racebox_car_csv_path):

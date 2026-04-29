@@ -1,8 +1,13 @@
 """
-telemetry_algorithms.py — shared telemetry math helpers.
+telemetry_algorithms.py — Shared telemetry math for preview and export.
 
-Preview and export must call the same functions here for lap info, smoothing,
-delta series, and history row shape (single source of truth).
+**Unify here:** lap timing display, lap-info / best-so-far state, G-meter smoothing
+hooks, map polyline builders, per-preview delta series, ``build_history_row`` field
+names — anything where a drift between Data-tab / overlay-editor preview and
+``video_renderer`` export would be a user-visible bug.
+
+**Do not unify:** JS Canvas drawing, matplotlib style code, RPC wiring — keep
+those separate unless they change the inputs or formulas above.
 """
 from __future__ import annotations
 

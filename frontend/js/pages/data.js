@@ -21,6 +21,7 @@
   let _config     = null;
   let _scanning    = false;
   let _autoSyncing = false;
+  let _autoSyncByCsv = {}; // csv_path -> { running:boolean, current:number, total:number, status:string, text:string, pct:number|null }
   let _statusMsg   = '';
   let _container   = null;
   let _metaQueue   = [];   // sessions waiting for meta fetch
@@ -29,6 +30,7 @@
   let _unlistenFns = [];   // push-event unlisten callbacks
   let _syncDecoderSessionId = '';
   let _syncDecoderVideoPath = '';
+  let _pageUnmounted = false; // guards async video.play() after route unmount
 
   // Best per day: csv_path → true if this session has the day's best lap
   let _dayBest = {};
@@ -44,21 +46,34 @@
 
   function fmtDateTime(iso) {
     if (!iso) return '—';
-    const m = String(iso).match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/);
-    if (m) return `${m[1]} ${m[2]}:${m[3]}${m[4] ? ':' + m[4] : ''}`;
     try {
-      return new Date(iso).toLocaleString(undefined,
+      return _dateFromIso(iso).toLocaleString(undefined,
         { year:'numeric', month:'2-digit', day:'2-digit',
           hour:'2-digit', minute:'2-digit' });
     } catch { return iso; }
   }
 
+  function _dateFromIso(iso) {
+    // Some cached sessions may store a naive ISO string without timezone.
+    // Treat those as UTC so display stays consistent (local time) before/after scan.
+    const s = String(iso || '');
+    const hasTz = /([zZ]|[+\-]\d{2}:\d{2})$/.test(s);
+    const normalized = hasTz ? s : (s ? (s + 'Z') : s);
+    return new Date(normalized);
+  }
+
   function dateKey(iso) {
     if (!iso) return 'Unknown';
-    const m = String(iso).match(/^(\d{4}-\d{2}-\d{2})[T ]/);
-    if (m) return m[1];
-    try { return new Date(iso).toISOString().slice(0, 10); }
-    catch { return 'Unknown'; }
+    try {
+      const d = _dateFromIso(iso);
+      if (isNaN(d.getTime())) return 'Unknown';
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    } catch {
+      return 'Unknown';
+    }
   }
 
   function esc(s) {
@@ -70,10 +85,172 @@
     return (p||'').replace(/\\/g,'/').split('/').pop() || p;
   }
 
+  /** Match auto_sync push csv_path to scan rows (UNC vs slash / case). */
+  function _normCsvPathKey(p) {
+    return String(p || '').replace(/\//g, '\\').toLowerCase();
+  }
+  function _findSessionByCsvPath(csvPath) {
+    if (!csvPath || !_sessions.length) return null;
+    const direct = _sessions.find(x => x.csv_path === csvPath);
+    if (direct) return direct;
+    const key = _normCsvPathKey(csvPath);
+    return _sessions.find(x => _normCsvPathKey(x.csv_path) === key) || null;
+  }
+
+  /** Path key variants for matching _config.offsets (mirrors Python _csv_key_variants). */
+  function _csvPathKeyVariants(csvPath) {
+    if (!csvPath) return [];
+    const raw = String(csvPath);
+    const out = [raw];
+    if (raw.includes('\\')) out.push(raw.replace(/\\/g, '/'));
+    if (raw.includes('/')) out.push(raw.replace(/\//g, '\\'));
+    return [...new Set(out.filter(Boolean))];
+  }
+
+  /** Read persisted offset/source using any path-variant key (avoids false “丢失” after cache/rescan). */
+  function _storedSyncFromConfig(csvPath) {
+    const o = _config?.offsets;
+    if (!o || typeof o !== 'object') return { offset: null, source: undefined };
+    const srcMap = _config?.offset_sources;
+    for (const k of _csvPathKeyVariants(csvPath)) {
+      if (Object.prototype.hasOwnProperty.call(o, k) && o[k] != null && Number.isFinite(Number(o[k]))) {
+        const src = srcMap && Object.prototype.hasOwnProperty.call(srcMap, k) ? srcMap[k] : undefined;
+        return { offset: Number(o[k]), source: src };
+      }
+    }
+    return { offset: null, source: undefined };
+  }
+
+  function _applyStoredSyncToSession(s) {
+    if (!s || !s.csv_path) return;
+    const { offset, source } = _storedSyncFromConfig(s.csv_path);
+    if (offset != null) {
+      s.sync_offset = offset;
+      if (source !== undefined) s.sync_source = source;
+    }
+  }
+
+  /**
+   * 当 sync_offset 为负时，用「第 1 圈」可能对不上视频 0s 起点（telemetry 早于录像）。
+   * 选第一个计时圈（非 out/in）使 off + elapsed_start >= 0，否则退回 pool 中最后一圈。
+   */
+  function pickAlignRefLapNumForOffset(off, laps, preferredRef) {
+    const o = Number(off);
+    const pref = Number(preferredRef);
+    if (!Number.isFinite(o) || !laps?.length) return pref;
+    const timed = laps.filter(l => !l.is_outlap && !l.is_inlap);
+    const pool = timed.length ? timed : laps;
+    const prefLap = laps.find(l => Number(l.lap_num) === pref);
+    const prefE = prefLap ? (Number(prefLap.elapsed_start) || 0) : 0;
+    if (o + prefE >= -1e-3) return pref;
+    const sorted = [...pool].sort((a, b) => (Number(a.elapsed_start) || 0) - (Number(b.elapsed_start) || 0));
+    for (const lap of sorted) {
+      const e = Number(lap.elapsed_start) || 0;
+      if (o + e >= -1e-3) return Number(lap.lap_num);
+    }
+    const last = sorted[sorted.length - 1];
+    return last ? Number(last.lap_num) : pref;
+  }
+
+  /** Auto-detected offsets: strong correlation vs metadata baseline fallback */
+  function syncIsAutoFamily(src) {
+    return src === 'auto' || src === 'auto_baseline';
+  }
+  function syncIsBaselineAuto(src) {
+    return src === 'auto_baseline';
+  }
+
+  /** Working offset: calibration panel writes _temp_sync_offset until「标记/确认」持久化 */
+  function sessionEffectiveOffset(s) {
+    if (!s) return null;
+    if (s._temp_sync_offset != null && Number.isFinite(Number(s._temp_sync_offset)))
+      return Number(s._temp_sync_offset);
+    if (s.sync_offset != null && Number.isFinite(Number(s.sync_offset))) return Number(s.sync_offset);
+    return null;
+  }
+
+  function sessionOffsetIsPreview(s) {
+    if (s._temp_sync_offset == null || !Number.isFinite(Number(s._temp_sync_offset))) return false;
+    const t = Number(s._temp_sync_offset);
+    if (s.sync_offset == null || !Number.isFinite(Number(s.sync_offset))) return true;
+    return Math.abs(t - Number(s.sync_offset)) > 1e-6;
+  }
+
+  /** 本节信息「偏移」：仅展示已写入配置的 sync_offset（不含拖条/播放的临时推算） */
+  function formatSavedSessionOffsetLabel(s) {
+    if (!s || s.sync_offset == null || !Number.isFinite(Number(s.sync_offset))) return '未设置';
+    const v = Number(s.sync_offset);
+    if (syncIsAutoFamily(s.sync_source)) return `${v.toFixed(3)}s ~自动`;
+    return `${v.toFixed(3)}s ✓`;
+  }
+
   function videoUrl(winPath) {
     // Pass path as a query param so browser slash-normalization never mangles UNC paths
     if (_videoPort) return `http://127.0.0.1:${_videoPort}/?f=${encodeURIComponent(winPath)}`;
     return 'file:///' + winPath.replace(/\\/g, '/');
+  }
+
+  // ── Debug (off by default) ────────────────────────────────────────────────────
+  // Enable in devtools console:
+  //   localStorage.setItem('openlap_debug_sync_video', '1')
+  // Disable:
+  //   localStorage.setItem('openlap_debug_sync_video', '0')
+  function _dbgSyncVideoEnabled() {
+    // Also allow an in-page toggle for environments where devtools localStorage is isolated:
+    //   window.__openlap_debug_sync_video = true
+    try {
+      if (typeof window !== 'undefined' && window.__openlap_debug_sync_video === true) return true;
+    } catch (_) {}
+    try { return localStorage.getItem('openlap_debug_sync_video') === '1'; } catch (_) { return false; }
+  }
+  function _dbgVideoState(v, extra = {}) {
+    if (!v) return { ...extra, v: null };
+    const rsMap = ['HAVE_NOTHING', 'HAVE_METADATA', 'HAVE_CURRENT_DATA', 'HAVE_FUTURE_DATA', 'HAVE_ENOUGH_DATA'];
+    const nsMap = ['NETWORK_EMPTY', 'NETWORK_IDLE', 'NETWORK_LOADING', 'NETWORK_NO_SOURCE'];
+    return {
+      ...extra,
+      readyState: v.readyState,
+      readyStateName: rsMap[v.readyState] || String(v.readyState),
+      networkState: v.networkState,
+      networkStateName: nsMap[v.networkState] || String(v.networkState),
+      paused: !!v.paused,
+      ended: !!v.ended,
+      currentTime: Number(v.currentTime || 0),
+      duration: Number.isFinite(Number(v.duration)) ? Number(v.duration) : null,
+      videoWidth: v.videoWidth || 0,
+      videoHeight: v.videoHeight || 0,
+      src: String(v.currentSrc || v.src || ''),
+    };
+  }
+  function dbgSyncVideo(tag, extra = {}) {
+    if (!_dbgSyncVideoEnabled()) return;
+    // Use console.log so it won't be hidden by "Verbose"/"Debug" filters in some devtools.
+    try { console.log('[sync_video]', tag, extra); } catch (_) {}
+  }
+  // Always-visible UI logs for user-triggered actions (click/drag).
+  function logSyncVideoUI(tag, extra = {}) {
+    try { console.log('[sync_video_ui]', tag, extra); } catch (_) {}
+  }
+
+  function _domBox(el) {
+    try {
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      const cs = window.getComputedStyle ? window.getComputedStyle(el) : null;
+      return {
+        w: Math.round(r.width),
+        h: Math.round(r.height),
+        x: Math.round(r.left),
+        y: Math.round(r.top),
+        display: cs ? cs.display : (el.style?.display || ''),
+        visibility: cs ? cs.visibility : (el.style?.visibility || ''),
+        opacity: cs ? cs.opacity : (el.style?.opacity || ''),
+        zIndex: cs ? cs.zIndex : (el.style?.zIndex || ''),
+        pointerEvents: cs ? cs.pointerEvents : (el.style?.pointerEvents || ''),
+      };
+    } catch (_) {
+      return null;
+    }
   }
 
   // ── Compute day-best ──────────────────────────────────────────────────────────
@@ -98,8 +275,8 @@
 
   function sortedGroups() {
     const sorted = [..._sessions].sort((a, b) => {
-      const ta = a.csv_start ? new Date(a.csv_start).getTime() : 0;
-      const tb = b.csv_start ? new Date(b.csv_start).getTime() : 0;
+      const ta = a.csv_start ? _dateFromIso(a.csv_start).getTime() : 0;
+      const tb = b.csv_start ? _dateFromIso(b.csv_start).getTime() : 0;
       return tb - ta;
     });
     const groups = [];
@@ -149,21 +326,21 @@
     const isSel   = s.csv_path === _selCsv;
     const isSplitSel = _splitSel.has(s.csv_path);
     const isDayB  = _dayBest[s.csv_path];
-    const timeMatch = s.csv_start ? String(s.csv_start).match(/^[0-9-]+[T ](\d{2}):(\d{2})/) : null;
-    const time = timeMatch ? `${timeMatch[1]}:${timeMatch[2]}`
-      : (s.csv_start ? new Date(s.csv_start).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}) : '—');
+    const time = s.csv_start
+      ? _dateFromIso(s.csv_start).toLocaleTimeString(undefined, { hour:'2-digit', minute:'2-digit' })
+      : '—';
     const trackOverride = _config?.session_info?.[s.csv_path]?.info_track;
     const track   = trackOverride || m.track || baseName(s.csv_path);
     const lapStr  = m.laps  || '—';
     const bestStr = m.best  || (m.best_secs != null ? fmtTime(m.best_secs) : '—');
     const syncLabel = s.needs_conversion           ? '↻ conv'
                     : (!s.matched)                  ? 'no vid'
-                    : s.sync_offset != null && s.sync_source === 'auto' ? '~ auto'
+                    : s.sync_offset != null && syncIsAutoFamily(s.sync_source) ? '~自动'
                     : s.sync_offset != null         ? '✓ user'
                     : '≈ unset';
     const iconCls   = s.needs_conversion           ? 'di-pending'
                     : (!s.matched)                  ? 'di-novid'
-                    : s.sync_offset != null && s.sync_source === 'auto' ? 'di-auto'
+                    : s.sync_offset != null && syncIsAutoFamily(s.sync_source) ? 'di-auto'
                     : s.sync_offset != null         ? 'di-user'
                     : 'di-unsync';
 
@@ -196,7 +373,7 @@
       csv_path:    s.csv_path,
       lap_idx:     0,
       video_paths: s.video_paths || [],
-      sync_offset: s.sync_offset ?? 0,
+      sync_offset: sessionEffectiveOffset(s) ?? 0,
       source:      s.source || 'RaceBox',
       csv_start:   s.csv_start  || null,
     });
@@ -216,8 +393,11 @@
       return;
     }
 
+    _applyStoredSyncToSession(s);
+
     const m   = _meta[s.csv_path] || {};
-    const off = s.sync_offset;
+    const effOff = sessionEffectiveOffset(s);
+    const savedOff = s.sync_offset != null && Number.isFinite(Number(s.sync_offset)) ? Number(s.sync_offset) : null;
 
     // Session info
     const vidPaths    = s.video_paths || [];
@@ -242,13 +422,14 @@
     <div class="dr-row"><span class="dr-lbl">圈数</span><span class="dr-val">${esc(m.laps||'—')}</span></div>
     <div class="dr-row"><span class="dr-lbl">最佳</span><span class="dr-val" style="color:var(--ok)">${esc(m.best||'—')}</span></div>
     <div class="dr-row"><span class="dr-lbl">视频</span><span class="dr-val ${hasVid?'':'dr-warn'}">${hasVid ? `✓ ${vidPaths.length} 段` : '✗ 未匹配'}</span></div>
-    <div class="dr-row"><span class="dr-lbl">偏移</span><span class="dr-val ${off!=null?'':'dr-warn'}" id="dr-off-display">${
-      off!=null
-        ? (s.sync_source === 'auto'
-            ? `${off.toFixed(3)}s ~ auto`
-            : `${off.toFixed(3)}s ✓`)
-        : '未设置'
-    }</span></div>
+    <div class="dr-row">
+      <span class="dr-lbl">偏移</span>
+      <span class="dr-val" id="dr-off-edit-wrap" style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap">
+        <span class="${savedOff!=null&&Number.isFinite(savedOff)?'':'dr-warn'}" id="dr-off-display">${esc(formatSavedSessionOffsetLabel(s))}</span>
+        <button type="button" class="btn-inline-edit" id="dr-off-edit-btn" title="编辑同步偏移（秒），应用后跳转视频到参考圈对齐位置"
+                style="opacity:0.65;font-size:9px;cursor:pointer;border:none;background:none;color:var(--acc2);padding:0 2px">✎</button>
+      </span>
+    </div>
   </div>
   <div class="dr-actions">
     <label class="dr-mode-label">模式:
@@ -272,7 +453,7 @@ ${s.needs_conversion ? `
 </div>` : ''}
 
 <!-- Video align -->
-${hasVid ? renderAlignCard(s, vidPaths, off) : `
+${hasVid ? renderAlignCard(s, vidPaths, effOff) : `
 <div class="dr-card">
   <div class="dr-card-title">视频</div>
   <div class="dr-hint" style="color:var(--warn)">未找到匹配视频。</div>
@@ -294,12 +475,19 @@ ${renderLapTagCard(s)}
     wirePropPanel(s, pane);
   }
 
-  function renderAlignCard(s, vidPaths, off) {
-    const offVal    = off != null ? off.toFixed(3) : '';
-    const isAuto    = s.sync_source === 'auto';
-    const isSyncing = _autoSyncing && s.sync_offset == null && !s.auto_sync_failed;
+  function renderAlignCard(s, vidPaths, effOffForReadoutInit) {
+    const offReadout = (effOffForReadoutInit != null && Number.isFinite(effOffForReadoutInit))
+      ? `${effOffForReadoutInit >= 0 ? '+' : ''}${effOffForReadoutInit.toFixed(3)}s`
+      : '—';
+    const offPreview = sessionOffsetIsPreview(s);
+    const isAuto    = syncIsAutoFamily(s.sync_source);
+    const isBaselineAuto = syncIsBaselineAuto(s.sync_source);
+    const savedAlignOff = s.sync_offset != null && Number.isFinite(Number(s.sync_offset)) ? Number(s.sync_offset) : null;
+    const as = _autoSyncByCsv?.[s.csv_path];
+    const isSyncing = !!as?.running;
     const laps = _lapDetails[s.csv_path] || [];
-    const defaultRefLap = (laps.find(l => !l.is_outlap)?.lap_num) || (laps[0]?.lap_num) || 1;
+    // Default to the first lap in list (including outlap), per UX requirement.
+    const defaultRefLap = (laps[0]?.lap_num) || 1;
     const savedRefLap = Number(_config?.session_info?.[s.csv_path]?.sync_ref_lap_num || defaultRefLap);
     const preciseMode = !!_config?.session_info?.[s.csv_path]?.sync_precise_mode;
     const lapOptions = laps.map((lap, idx) => {
@@ -307,30 +495,45 @@ ${renderLapTagCard(s)}
       const sel = lapNum === savedRefLap ? 'selected' : '';
       return `<option value="${lapNum}" ${sel}>第 ${lapNum} 圈</option>`;
     }).join('');
+    const autoSyncBtnText = (s.sync_offset != null) ? '🪄 重新对齐' : '🪄 自动对齐';
+    const autoSyncBtnTitle = (s.sync_offset != null)
+      ? '强制重新运行自动对齐（不会覆盖已确认的用户偏移）'
+      : '按元数据时间 + 微调进行自动对齐';
     const autoNote  = isSyncing
       ? `<div style="font-size:9px;color:#ffb74d;margin-bottom:6px;padding:5px 6px;
                      background:rgba(255,183,77,0.08);border-radius:4px;border-left:2px solid #ffb74d">
            正在自动检测同步偏移… 完成后可拖动校准。
          </div>`
       : isAuto
-      ? `<div style="font-size:9px;color:#64b5f6;margin-bottom:6px;padding:5px 6px;
-                     background:rgba(100,181,246,0.08);border-radius:4px;border-left:2px solid #64b5f6">
-           自动检测结果：${off != null ? off.toFixed(3)+'s' : '—'} — 请拖动核对后点击确认
+      ? `<div style="font-size:9px;color:#b0c4e8;margin-bottom:6px;padding:5px 6px;
+                     background:rgba(100,140,220,0.1);border-radius:4px;border-left:2px solid #90caf9">
+           自动对齐已采用 <strong>${savedAlignOff != null ? savedAlignOff.toFixed(3)+'s' : '—'}</strong> 作为本节的同步偏移（~自动，第一版）。
+           ${isBaselineAuto ? '本结果以元数据为锚，运动相关置信度较低属正常。' : '运动相关匹配置信度高。'}
+           可直接<strong>打开叠加预览</strong>；若要再抠起点线，用 seek / 选「对齐第X圈」微调即可；满意后点「确认」只是把当前对齐<strong>标为用户锁定</strong>（非必须）。
          </div>`
       : '';
     return `
 <div class="dr-card dr-align-card">
   <div class="dr-card-title">校准视频</div>
   ${autoNote}
-  <div class="sync-frame-wrap">
+  <div class="sync-frame-wrap" data-autosync="${isSyncing ? '1' : '0'}">
     <video id="sync-video-live" class="sync-video" muted playsinline preload="auto" style="display:none"></video>
     <img id="sync-frame" class="sync-video" alt="">
     <div id="sync-loading" class="sync-loading">
       <span class="sync-spinner" aria-hidden="true"></span>
       <span id="sync-loading-text">视频加载中…</span>
     </div>
+    <div id="sync-autosync-overlay" class="sync-autosync-overlay ${isSyncing ? '' : 'hidden'}" aria-live="polite">
+      <div class="sync-autosync-panel">
+        <div class="sync-autosync-title">自动对齐进行中…</div>
+        <div class="sync-autosync-sub" id="sync-autosync-text">${esc(as?.text || '手动校准已暂时锁定')}</div>
+        <div class="sync-autosync-bar">
+          <div class="sync-autosync-bar-fill ${as?.pct == null ? 'indeterminate' : ''}" id="sync-autosync-bar-fill" style="width:${as?.pct != null ? `${Math.max(0, Math.min(100, as.pct)).toFixed(1)}%` : '40%'}"></div>
+        </div>
+      </div>
+    </div>
   </div>
-  <div class="sync-controls">
+  <div class="sync-controls" data-autosync="${isSyncing ? '1' : '0'}">
     <button class="btn btn-sm" id="sv-mm">◀◀ −1s</button>
     <button class="btn btn-sm" id="sv-m">◀ −1f</button>
     <button class="btn btn-sm" id="sv-play">▶ 播放</button>
@@ -341,15 +544,17 @@ ${renderLapTagCard(s)}
   <input type="range" id="sv-scrub" class="sync-scrub" min="0" max="1000" value="0" step="1">
   <div class="sync-mark-row">
     <button class="btn btn-ok btn-sm" id="sv-mark">${isAuto ? '✓ 确认对齐圈起点' : '🏁 标记对齐圈起点'}</button>
-    <button class="btn btn-secondary btn-sm" id="sv-auto-sync" title="按元数据时间 + 微调进行自动对齐">🪄 自动对齐</button>
+    <button class="btn btn-secondary btn-sm" id="sv-auto-sync" title="${esc(autoSyncBtnTitle)}">${autoSyncBtnText}</button>
     <label style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--text2);padding:0 4px;white-space:nowrap" title="开启后按帧/按秒/拖动优先走精确帧解码（更准但更吃性能）">
       <input type="checkbox" id="sv-precise-mode" ${preciseMode ? 'checked' : ''}>
       精确模式
     </label>
     ${lapOptions ? `<select id="sv-ref-lap" class="input-field input-narrow sync-off-input" title="选择按哪一圈对齐">${lapOptions}</select>` : ''}
-    <input type="number" id="sv-off-input" class="input-field input-narrow sync-off-input"
-           step="0.001" value="${esc(offVal)}" placeholder="0.000" title="Current offset (s) — follows video position">
-    <span class="sync-mark-val" id="sv-mark-val">${off!=null && !isAuto ? '✓ saved' : ''}</span>
+    <span class="sync-mark-val" id="sv-mark-val">${offPreview ? '预览' : (savedAlignOff != null && !isAuto ? '✓ saved' : '')}</span>
+  </div>
+  <div class="sync-offset-readout" title="由当前帧与参考圈反算的 offset，拖条时会临时预览；自动对齐写入的值已生效，可直接预览。秒数输入请点 ✎">
+    <span class="sync-offset-readout-lbl">推算 offset（只读）</span>
+    <code id="sv-off-readout" class="sync-off-readout-code">${esc(offReadout)}</code>
   </div>
   ${vidPaths.length > 1 ? `<div style="font-size:9px;color:var(--text3);margin-top:4px">另有 ${vidPaths.length-1} 段视频</div>` : ''}
 </div>`;
@@ -361,6 +566,14 @@ ${renderLapTagCard(s)}
       const r = await API.startAutoSync([s], { force: true });
       if (r?.queued > 0) {
         _autoSyncing = true;
+        _autoSyncByCsv[s.csv_path] = {
+          running: true,
+          current: 0,
+          total: 0,
+          status: 'starting',
+          text: '正在启动… 手动校准已暂时锁定',
+          pct: null,
+        };
         const why = reason ? `（${reason}）` : '';
         setStatus(`自动同步已开始${why}…`);
         if (_selCsv === s.csv_path) renderRight();
@@ -369,14 +582,54 @@ ${renderLapTagCard(s)}
       const why = reason ? `（${reason}）` : '';
       const reasonMap = {
         disabled: '全局自动同步开关关闭',
-        export_running: '正在导出中',
-        auto_sync_running: '已有自动同步任务在运行',
         no_eligible_sessions: '该节当前不满足自动同步条件',
       };
       const msg = reasonMap[r?.reason] || `未启动（${r?.reason || 'unknown'}）`;
       setStatus(`自动同步未启动${why}：${msg}`);
     } catch (_) {}
     return false;
+  }
+
+  function _setAutoSyncUiFor(csvPath, patch) {
+    if (!csvPath) return;
+    const prev = _autoSyncByCsv[csvPath] || {};
+    _autoSyncByCsv[csvPath] = { ...prev, ...patch };
+  }
+
+  function _updateAutoSyncOverlayIfVisible(csvPath) {
+    if (!_container || _selCsv !== csvPath) return;
+    const overlay = _container.querySelector('#sync-autosync-overlay');
+    if (!overlay) return;
+    const st = _autoSyncByCsv[csvPath];
+    // Safety: if global auto-sync is no longer running, never keep controls locked.
+    if (!st?.running || !_autoSyncing) {
+      overlay.classList.add('hidden');
+      overlay.closest('.sync-frame-wrap')?.setAttribute('data-autosync', '0');
+      overlay.closest('.dr-align-card')?.querySelector('.sync-controls')?.setAttribute('data-autosync', '0');
+      // Unlock controls
+      _container.querySelectorAll('#sv-mm,#sv-m,#sv-play,#sv-p,#sv-pp,#sv-scrub,#sv-mark,#sv-auto-sync,#sv-precise-mode,#sv-ref-lap')
+        .forEach(el => { try { el.disabled = false; } catch {} });
+      return;
+    }
+
+    overlay.classList.remove('hidden');
+    overlay.closest('.sync-frame-wrap')?.setAttribute('data-autosync', '1');
+    overlay.closest('.dr-align-card')?.querySelector('.sync-controls')?.setAttribute('data-autosync', '1');
+    const textEl = overlay.querySelector('#sync-autosync-text');
+    if (textEl) textEl.textContent = st.text || '自动对齐进行中…';
+    const fill = overlay.querySelector('#sync-autosync-bar-fill');
+    if (fill) {
+      if (st.pct == null) {
+        fill.classList.add('indeterminate');
+        fill.style.width = '40%';
+      } else {
+        fill.classList.remove('indeterminate');
+        fill.style.width = `${Math.max(0, Math.min(100, st.pct)).toFixed(1)}%`;
+      }
+    }
+    // Lock controls while running
+    _container.querySelectorAll('#sv-mm,#sv-m,#sv-play,#sv-p,#sv-pp,#sv-scrub,#sv-mark,#sv-auto-sync,#sv-precise-mode,#sv-ref-lap')
+      .forEach(el => { try { el.disabled = true; } catch {} });
   }
 
   function renderLapTagCard(s) {
@@ -523,7 +776,7 @@ ${renderLapTagCard(s)}
         csv_path:    s.csv_path,
         lap_idx:     lap ? lap.lap_idx : 0,
         video_paths: s.video_paths || [],
-        sync_offset: s.sync_offset ?? 0,
+        sync_offset: sessionEffectiveOffset(s) ?? 0,
         source:      s.source || 'RaceBox',
         csv_start:   s.csv_start  || null,
       });
@@ -590,6 +843,56 @@ ${renderLapTagCard(s)}
 
     // Video sync
     wireVideoSync(s, pane);
+    // Safety: auto-sync overlay may have locked controls before this pane was rebuilt.
+    // Refresh it once after wiring so scrub/buttons are usable if auto-sync is no longer running.
+    try { _updateAutoSyncOverlayIfVisible(s.csv_path); } catch (_) {}
+
+    // Session offset — same UX as track: inline edit in「本节信息」, applies seek on video
+    pane.querySelector('#dr-off-edit-btn')?.addEventListener('click', () => {
+      const wrap = pane.querySelector('#dr-off-edit-wrap');
+      if (!wrap) return;
+      const cur = s.sync_offset != null && Number.isFinite(Number(s.sync_offset)) ? Number(s.sync_offset) : null;
+      const curStr = cur != null ? String(cur) : '0';
+      wrap.innerHTML = `
+        <input type="number" step="0.001" class="input-field" id="dr-off-input" value="${esc(curStr)}"
+               style="width:110px;font-size:11px;padding:2px 6px;font-family:var(--mono)">
+        <button type="button" class="btn btn-sm" id="dr-off-apply" style="padding:1px 8px">应用</button>
+        <button type="button" class="btn btn-sm" id="dr-off-cancel" style="padding:1px 6px">✕</button>
+      `;
+      const inp = pane.querySelector('#dr-off-input');
+      inp?.focus();
+      inp?.select?.();
+
+      const cancel = () => { renderRight(); };
+      const apply = async () => {
+        const v = Number(inp?.value);
+        if (!Number.isFinite(v)) return;
+        const fn = pane._openlapApplyOffset;
+        if (typeof fn !== 'function') {
+          setStatus('视频面板未就绪，请稍候再试');
+          cancel();
+          return;
+        }
+        await fn(v);
+        // Do NOT re-render the whole panel here: wireVideoSync() re-initializes
+        // from saved sync_offset and would clobber the just-applied preview offset (_temp).
+        // Instead, update only the small "saved/preview" badge.
+        const markEl = pane.querySelector('#sv-mark-val');
+        if (markEl) {
+          const offPreview = sessionOffsetIsPreview(s);
+          const isAuto = syncIsAutoFamily(s.sync_source);
+          const savedAlignOff =
+            s.sync_offset != null && Number.isFinite(Number(s.sync_offset)) ? Number(s.sync_offset) : null;
+          markEl.textContent = offPreview ? '预览' : (savedAlignOff != null && !isAuto ? '✓ saved' : '');
+        }
+      };
+      pane.querySelector('#dr-off-apply')?.addEventListener('click', apply);
+      pane.querySelector('#dr-off-cancel')?.addEventListener('click', cancel);
+      inp?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); apply(); }
+        if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+      });
+    });
 
     // Manual lap tag toggles
     pane.querySelectorAll('.lap-tag-toggle').forEach(el => {
@@ -614,12 +917,12 @@ ${renderLapTagCard(s)}
   function wireVideoSync(s, pane) {
     const frameEl = pane.querySelector('#sync-frame');
     const liveVideoEl = pane.querySelector('#sync-video-live');
+    const frameWrapEl = frameEl?.closest?.('.sync-frame-wrap') || null;
     const loadingEl = pane.querySelector('#sync-loading');
     const loadingTextEl = pane.querySelector('#sync-loading-text');
     const scrub = pane.querySelector('#sv-scrub');
     const timeEl = pane.querySelector('#sv-time');
     const markEl = pane.querySelector('#sv-mark-val');
-    const offInp = pane.querySelector('#sv-off-input');
     const refLapSel = pane.querySelector('#sv-ref-lap');
     const playBtn = pane.querySelector('#sv-play');
     const autoSyncBtn = pane.querySelector('#sv-auto-sync');
@@ -629,20 +932,133 @@ ${renderLapTagCard(s)}
     const videoPath = s.video_paths?.[0];
     if (!videoPath) return;
 
+    function applyVideoAspectRatioFromMeta() {
+      try {
+        if (!frameWrapEl || !liveVideoEl) return;
+        const vw = Number(liveVideoEl.videoWidth || 0);
+        const vh = Number(liveVideoEl.videoHeight || 0);
+        if (!(vw > 0 && vh > 0)) return;
+        frameWrapEl.style.setProperty('--sync-ar', `${vw} / ${vh}`);
+      } catch (_) {}
+    }
+
+    // Ensure we start from the video layer (avoids JPEG/img blank screens).
+    try { liveVideoEl && (liveVideoEl.style.display = 'block'); } catch (_) {}
+    try { frameEl && (frameEl.style.display = 'none'); } catch (_) {}
+    dbgSyncVideo('wireVideoSync_init', {
+      csv: s.csv_path,
+      videoPath,
+      autoSyncing: _autoSyncing,
+      autoSyncState: _autoSyncByCsv?.[s.csv_path] || null,
+      video: _dbgVideoState(liveVideoEl),
+    });
+
     let fps = 30;
     let frameCount = 0;
     let curFrame = 0;
     let busy = false;
     let decoderSessionId = '';
     let playing = false;
+    // Guard against WebView2 firing pause during play startup (can abort play() promises).
+    let playStarting = false;
     let playTimer = null;
     let playStartFrame = 0;
     let playStartMs = 0;
     let decodeSeq = 0;
-    let liveMode = false;
+    // Calibration playback: default to <video> pipeline to match editor preview.
+    // Only switch to OpenCV/JPEG when we explicitly need shutter-encoder-like frame jumps.
+    let liveMode = true;
     let gpuReady = false;
+    /** Scrub on OpenCV path: coalesce rapid input to latest frame only. */
+    let scrubDecodeBusy = false;
+    let scrubDecodeQueuedTarget = null;
+    /** Debounced OpenCV JPEG refresh after native <video> seeks (keeps UI snappy like old pure-video build). */
+    let alignJpegTimer = null;
     let preciseMode = !!_config?.session_info?.[s.csv_path]?.sync_precise_mode;
-    const isGpuOnly = () => !preciseMode;
+    /** User ±1s/±1f / 换参考圈等：锁步进按钮防连点，并显示「定位中」；不锁进度条以免拖条丢事件 */
+    let syncSeekUiHeld = false;
+    /** 拖条按住期间同步锁步进（不可能边拖边点 ± 帧）；与 syncSeekUiHeld 叠加时由两者共同决定何时解锁 */
+    let scrubPointerHeld = false;
+    const seekStepButtonSelectors = ['#sv-mm', '#sv-m', '#sv-p', '#sv-pp'];
+    function setSeekStepButtonsDisabled(disabled) {
+      seekStepButtonSelectors.forEach(sel => {
+        const el = pane.querySelector(sel);
+        if (el) el.disabled = !!disabled;
+      });
+      if (refLapSel) refLapSel.disabled = !!disabled;
+    }
+    function refreshSeekStepButtonsDisabled() {
+      setSeekStepButtonsDisabled(syncSeekUiHeld || scrubPointerHeld);
+    }
+    function beginSyncSeekUi() {
+      if (syncSeekUiHeld) return false;
+      syncSeekUiHeld = true;
+      refreshSeekStepButtonsDisabled();
+      setLoading(true, '定位中…');
+      return true;
+    }
+    function endSyncSeekUi() {
+      if (!syncSeekUiHeld) return;
+      syncSeekUiHeld = false;
+      if (!scrubPointerHeld) setSeekStepButtonsDisabled(false);
+      setLoading(false);
+    }
+
+    function stopBeforeSeek() {
+      if (playing) stopPlayback();
+      else stopPlayback({ bumpDecode: false });
+    }
+    /** Same idea as preview: prefer browser <video> seeking; OpenCV only for precise/fallback. */
+    function canUseNativeVideoSeek() {
+      if (!liveVideoEl || !videoPath) return false;
+      try {
+        return liveVideoEl.readyState >= 1
+          && Number.isFinite(liveVideoEl.duration)
+          && liveVideoEl.duration > 0;
+      } catch (_) {
+        return false;
+      }
+    }
+    function scheduleAlignJpegRefresh() {
+      if (!decoderSessionId) return;
+      if (alignJpegTimer) clearTimeout(alignJpegTimer);
+      alignJpegTimer = setTimeout(async () => {
+        alignJpegTimer = null;
+        try {
+          // Non-precise jumps must stay on <video> pipeline.
+          // Only allow OpenCV/JPEG shutter-encoder-like refresh when user enables 精确模式.
+          if (!preciseMode) return;
+          if (!frameEl?.isConnected || playing || liveMode) return;
+          await decodeToFrameCpu(curFrame, true);
+        } catch (_) { /* ignore */ }
+      }, 45);
+    }
+    /** Wait for in-flight OpenCV decode so GPU play / seek does not race libavcodec (Windows pthread_frame assert). */
+    async function awaitDecodeIdle() {
+      for (let i = 0; i < 150 && busy; i++) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    }
+    const getActiveOffset = () => {
+      const t = (s && (s._temp_sync_offset ?? s.sync_offset));
+      return Number.isFinite(Number(t)) ? Number(t) : 0;
+    };
+    /** 已写入的同步偏移（auto/user）；换参考圈时用其预测各圈起点，避免 _temp 推算值盖住基线 */
+    const baselineOrActiveOffsetForSeek = () => {
+      if (s.sync_offset != null && Number.isFinite(Number(s.sync_offset)))
+        return Number(s.sync_offset);
+      return getActiveOffset();
+    };
+    const setTempOffset = (val) => {
+      const n = Number(val);
+      if (!Number.isFinite(n)) return;
+      s._temp_sync_offset = n;
+      // Keep previewSession offset in sync (preview only; not persisted until mark).
+      const prev = State.get('previewSession');
+      if (prev && prev.csv_path === s.csv_path) {
+        State.set('previewSession', { ...prev, sync_offset: n });
+      }
+    };
 
     function setLoading(show, text = '视频加载中…') {
       if (loadingTextEl) loadingTextEl.textContent = text;
@@ -665,7 +1081,115 @@ ${renderLapTagCard(s)}
     function maxFrame() {
       return Math.max(0, (frameCount || 0) - 1);
     }
-    function applyMeta() {
+    /** Prefer OpenCV frame_count; before it arrives use <video> duration so seek clamps are not stuck at 0s. */
+    function videoDurationSec() {
+      const fromFrames = frameToTime(Math.max(0, maxFrame()));
+      if (fromFrames > 0.25) return fromFrames;
+      try {
+        const d = Number(liveVideoEl?.duration);
+        if (Number.isFinite(d) && d > 0.25) return d;
+      } catch (_) {}
+      return Math.max(fromFrames, 0);
+    }
+    /** Clamp telemetry-derived video time to file bounds [0, duration]. */
+    function clampVideoTimeSec(tSec) {
+      return Math.max(0, Math.min(videoDurationSec(), Number(tSec) || 0));
+    }
+    /**
+     * When showing JPEG preview (liveMode off), keep the hidden <video> seeked to curFrame
+     * so「应用 offset」后切 GPU / ±帧 仍从正确时间线起步。
+     */
+    function syncHiddenLiveVideoFromCurFrame() {
+      if (!liveVideoEl || !videoPath) return;
+      if (liveMode) return;
+      if (playing) return;
+      try {
+        const t = frameToTime(Math.max(0, Math.min(maxFrame(), curFrame)));
+        if (Number.isFinite(t)) liveVideoEl.currentTime = t;
+      } catch (_) {}
+    }
+
+    const safePlay = async (v) => {
+      if (_pageUnmounted) return;
+      if (!v || !v.isConnected || !videoPath) return;
+      try {
+        const p = v.play();
+        if (p && typeof p.catch === 'function') {
+          await p.catch((err) => {
+            // Important: surface play() failures (policy / decode / network) for diagnosis.
+            logSyncVideoUI('video_play_rejected', {
+              name: err?.name,
+              message: String(err?.message || err || ''),
+              video: _dbgVideoState(v),
+            });
+          });
+        }
+      } catch (err) {
+        logSyncVideoUI('video_play_throw', {
+          name: err?.name,
+          message: String(err?.message || err || ''),
+          video: _dbgVideoState(v),
+        });
+      }
+    };
+
+    async function warmUpLivePaintOrFallback() {
+      if (!liveVideoEl || !videoPath) return;
+      dbgSyncVideo('warmUp_begin', {
+        playing,
+        liveMode,
+        gpuReady,
+        curFrame,
+        video: _dbgVideoState(liveVideoEl),
+      });
+      // Wait for the seek to settle (avoid racing paint).
+      try {
+        await new Promise(resolve => {
+          let done = false;
+          const finish = () => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            resolve();
+          };
+          const onSeeked = () => finish();
+          const timer = setTimeout(finish, 800);
+          try { liveVideoEl.addEventListener('seeked', onSeeked, { once: true }); } catch (_) {}
+          // If seeked already fired, timeout will resolve.
+        });
+      } catch (_) {}
+      // Prefer a paint signal without starting playback.
+      // If supported, requestVideoFrameCallback is the cleanest way to wait for a rendered frame.
+      try {
+        const v = liveVideoEl;
+        if (v && typeof v.requestVideoFrameCallback === 'function') {
+          await new Promise(resolve => {
+            let done = false;
+            const fin = () => { if (done) return; done = true; resolve(); };
+            try { v.requestVideoFrameCallback(() => fin()); } catch (_) { fin(); }
+            setTimeout(fin, 250);
+          });
+        } else {
+          // Fallback: a couple of RAFs usually lets the compositor catch up.
+          await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        }
+      } catch (_) {}
+      // As a last resort, nudge layout/compositor without playing.
+      try {
+        const prevVis = liveVideoEl.style.visibility;
+        liveVideoEl.style.visibility = 'hidden';
+        void liveVideoEl.offsetHeight;
+        liveVideoEl.style.visibility = prevVis || 'visible';
+      } catch (_) {}
+      dbgSyncVideo('warmUp_end', {
+        playing,
+        liveMode,
+        gpuReady,
+        curFrame,
+        video: _dbgVideoState(liveVideoEl),
+      });
+    }
+    function applyMeta(forceWriteTemp = false) {
       if (scrub) {
         scrub.min = '0';
         scrub.max = String(maxFrame());
@@ -674,7 +1198,18 @@ ${renderLapTagCard(s)}
       }
       const t = frameToTime(curFrame);
       if (timeEl) timeEl.textContent = fmtVTime(t);
-      if (offInp) offInp.value = t.toFixed(3);
+      // Readout: video_time at curFrame minus ref lap → implied sync offset (只读条 + 本节信息)
+      const ro = pane.querySelector('#sv-off-readout');
+      if (ro) {
+        const refElapsed = getRefLapElapsed();
+        const off = t - refElapsed;
+        const sign = off >= 0 ? '+' : '';
+        ro.textContent = `${sign}${off.toFixed(3)}s`;
+        // auto 偏移已信任采用：勿用推算条被动刷新 _temp 盖住 sync_offset；用户拖条/±帧会 setTempOffset 进入预览。
+        const lockSavedAutoOffset = !forceWriteTemp && syncIsAutoFamily(s.sync_source) && !sessionOffsetIsPreview(s);
+        if (!lockSavedAutoOffset) setTempOffset(off);
+      }
+      syncHiddenLiveVideoFromCurFrame();
     }
     function updatePlayBtn() {
       if (!playBtn) return;
@@ -686,81 +1221,90 @@ ${renderLapTagCard(s)}
       liveMode = true;
       liveVideoEl.style.display = 'block';
       frameEl.style.display = 'none';
+      try { liveVideoEl.classList.add('ready'); } catch (_) {}
       setLoading(false);
+      dbgSyncVideo('switchToLiveMode', {
+        liveMode,
+        gpuReady,
+        curFrame,
+        liveVideoDisplay: liveVideoEl.style.display,
+        frameDisplay: frameEl?.style?.display,
+        video: _dbgVideoState(liveVideoEl),
+      });
     }
     function switchToFrameMode() {
       if (!liveVideoEl) return;
       liveMode = false;
       liveVideoEl.style.display = 'none';
       frameEl.style.display = 'block';
+      try { liveVideoEl.classList.remove('ready'); } catch (_) {}
+      dbgSyncVideo('switchToFrameMode', {
+        liveMode,
+        gpuReady,
+        curFrame,
+        liveVideoDisplay: liveVideoEl.style.display,
+        frameDisplay: frameEl?.style?.display,
+        video: _dbgVideoState(liveVideoEl),
+      });
     }
-    function stopPlayback() {
+    /**
+     * @param {{ bumpDecode?: boolean }} [opts]
+     * bumpDecode=false: user pressed pause — do not bump decodeSeq so in-flight decode can finish
+     *   and curFrame stays exactly where playback stopped (for frame-by-frame tuning).
+     */
+    function stopPlayback(opts) {
+      const bumpDecode = opts?.bumpDecode !== false;
       playing = false;
       if (playTimer) {
         clearTimeout(playTimer);
         playTimer = null;
       }
-      decodeSeq += 1;
+      // Only trust <video>.currentTime when we were actually showing the live layer.
+      // In JPEG/frame playback liveMode is false and the hidden video often stays at 0 — syncing from it would snap the scrub to the start.
+      const wasLiveMode = liveMode;
+      if (bumpDecode) decodeSeq += 1;
       if (liveVideoEl) {
         try { liveVideoEl.pause(); } catch (_) {}
-        const t = Number(liveVideoEl.currentTime || 0);
-        if (Number.isFinite(t)) {
-          curFrame = Math.max(0, Math.min(maxFrame(), timeToFrame(t)));
-          applyMeta();
+        if (wasLiveMode) {
+          const t = Number(liveVideoEl.currentTime || 0);
+          if (Number.isFinite(t)) {
+            curFrame = Math.max(0, Math.min(maxFrame(), timeToFrame(t)));
+            applyMeta();
+          }
         }
       }
-      switchToFrameMode();
+      // Keep live frame visible after pause to avoid black flash.
+      if (wasLiveMode) switchToLiveMode();
+      else switchToFrameMode();
       updatePlayBtn();
+      dbgSyncVideo('stopPlayback', {
+        bumpDecode,
+        wasLiveMode,
+        playing,
+        liveMode,
+        gpuReady,
+        curFrame,
+        video: _dbgVideoState(liveVideoEl),
+      });
     }
-    function startPlayback() {
-      if (!decoderSessionId && !gpuReady) return;
+    async function startPlayback() {
+      if (alignJpegTimer) {
+        clearTimeout(alignJpegTimer);
+        alignJpegTimer = null;
+      }
       if (playing) return;
       playing = true;
-      playStartFrame = curFrame;
-      playStartMs = performance.now();
+      playStarting = true;
       updatePlayBtn();
-      const startFramePlayback = () => {
-        if (isGpuOnly()) {
-          playing = false;
-          updatePlayBtn();
-          setStatus('GPU 播放不可用：当前已禁用 CPU 逐帧回放');
-          return;
-        }
-        const tick = async () => {
-          if (!playing) return;
-          // live 模式与帧解码模式严格互斥，避免并发触发 ffmpeg 线程断言
-          if (liveMode) return;
-          // Pane was re-rendered/unmounted: stop stale timer.
-          if (!frameEl.isConnected) {
-            stopPlayback();
-            return;
-          }
-          if (curFrame >= maxFrame()) {
-            stopPlayback();
-            return;
-          }
-          const f = Math.max(1, Number(fps) || 30);
-          const elapsedS = Math.max(0, (performance.now() - playStartMs) / 1000);
-          const desired = Math.min(maxFrame(), playStartFrame + Math.floor(elapsedS * f));
-          // 混合策略：小步进优先（连续解码更流畅），落后较大时再 seek 追帧。
-          if (desired > curFrame && !busy) {
-            const gap = desired - curFrame;
-            if (gap <= 2) {
-              await step(1, true);
-            } else {
-              await decodeToFrame(desired, true);
-            }
-          }
-          if (curFrame >= maxFrame()) {
-            stopPlayback();
-            return;
-          }
-          playTimer = setTimeout(tick, 1000 / Math.max(10, Math.min(60, f)));
-        };
-        tick();
-      };
+
+      if (!liveVideoEl || !videoPath) {
+        setStatus('视频未就绪');
+        playing = false;
+        updatePlayBtn();
+        return;
+      }
+
       async function ensureLiveReady() {
-        if (!liveVideoEl || !videoPath) return false;
         try {
           const expected = videoUrl(videoPath);
           if (liveVideoEl.src !== expected) {
@@ -790,73 +1334,183 @@ ${renderLapTagCard(s)}
           return false;
         }
       }
-      if (liveVideoEl && videoPath) {
-        (async () => {
-          const ready = await ensureLiveReady();
-          if (!playing) return;
-          if (!ready) {
-            // Live path failed in this environment; keep frame mode fallback.
-            switchToFrameMode();
-            startFramePlayback();
-            return;
-          }
-          try {
-            liveVideoEl.currentTime = frameToTime(curFrame);
-            const p = liveVideoEl.play();
-            if (p && typeof p.then === 'function') {
-              await p;
-            }
-            if (!playing) return;
-            // Only hide frame layer after live video is actually playing.
-            switchToLiveMode();
-            gpuReady = true;
-          } catch (_) {
-            switchToFrameMode();
-            startFramePlayback();
-          }
-        })();
-      } else {
-        startFramePlayback();
+
+      const ready = await ensureLiveReady();
+      if (!playing) return;
+      if (!ready) {
+        setStatus('视频未就绪');
+        playing = false;
+        updatePlayBtn();
+        dbgSyncVideo('startPlayback_notReady', {
+          playing,
+          liveMode,
+          gpuReady,
+          curFrame,
+          video: _dbgVideoState(liveVideoEl),
+        });
+        return;
       }
-    }
-    async function decodeToFrame(targetFrame, quiet = false) {
-      if (isGpuOnly() && gpuReady && liveVideoEl) {
-        try {
-          const clamped = Math.max(0, Math.min(maxFrame(), Number(targetFrame || 0)));
-          const t = frameToTime(clamped);
-          try { liveVideoEl.pause(); } catch (_) {}
-          switchToLiveMode();
-          liveVideoEl.currentTime = t;
-          curFrame = clamped;
-          applyMeta();
-          return;
-        } catch (_) {
-          // live path unavailable, fall through
+
+      try { switchToLiveMode(); } catch (_) {}
+      gpuReady = true;
+
+      // Keep <video> current frame in sync.
+      try {
+        const tPlay = frameToTime(curFrame);
+        liveVideoEl.currentTime = tPlay;
+      } catch (_) {}
+
+      dbgSyncVideo('startPlayback_beforePlay', {
+        playing,
+        liveMode,
+        gpuReady,
+        curFrame,
+        video: _dbgVideoState(liveVideoEl, { tPlay: frameToTime(curFrame) }),
+      });
+      await safePlay(liveVideoEl);
+      // Diagnose/force paint: sometimes WebView2 advances currentTime but shows black.
+      try {
+        const v = liveVideoEl;
+        const loadingBox = _domBox(loadingEl);
+        const frameBox = _domBox(frameEl);
+        const videoBox = _domBox(v);
+        logSyncVideoUI('after_play_paint_check', {
+          playing,
+          liveMode,
+          gpuReady,
+          curFrame,
+          video: _dbgVideoState(v),
+          boxes: { video: videoBox, frame: frameBox, loading: loadingBox },
+        });
+        let gotFrameCb = false;
+        if (v && typeof v.requestVideoFrameCallback === 'function') {
+          v.requestVideoFrameCallback(() => {
+            gotFrameCb = true;
+            logSyncVideoUI('rvfc_fired', { video: _dbgVideoState(v), box: _domBox(v) });
+          });
         }
-      }
+        setTimeout(() => {
+          if (_pageUnmounted) return;
+          // If no RVFC fired quickly, try a visibility toggle to force repaint.
+          if (!gotFrameCb && v && v.isConnected) {
+            try {
+              const prevVis = v.style.visibility;
+              v.style.visibility = 'hidden';
+              // Force layout
+              void v.offsetHeight;
+              v.style.visibility = prevVis || 'visible';
+              logSyncVideoUI('force_repaint_visibility_toggle', { video: _dbgVideoState(v), box: _domBox(v) });
+            } catch (_) {}
+          }
+        }, 350);
+      } catch (_) {}
+      dbgSyncVideo('startPlayback_afterPlay', {
+        playing,
+        liveMode,
+        gpuReady,
+        curFrame,
+        video: _dbgVideoState(liveVideoEl),
+      });
+      // If play didn't actually start, clear starting flag shortly so pause can work normally.
+      setTimeout(() => { playStarting = false; }, 500);
+    }
+    /** OpenCV JPEG path only (used when <video> GPU preview is unusable). */
+    async function decodeToFrameCpu(targetFrame, quiet = false, forceWriteTemp = false) {
+      await awaitDecodeIdle();
       switchToFrameMode();
-      if (busy) return;
+      // Invalidate any in-flight seek for this panel so an older RPC cannot paint after a newer one
+      // (e.g. 换参考圈时仍共用 decodeSeq=0 的旧解码会盖住新帧 — Python 已 seek 但 <img> 仍是上一段)。
+      decodeSeq += 1;
       const mySeq = decodeSeq;
       busy = true;
       if (!quiet) setLoading(true, '正在解码帧…');
       try {
-        if (!decoderSessionId) return;
+        if (!decoderSessionId) {
+          if (!quiet) {
+            setStatus('无法解码：未建立 OpenCV 会话（视频路径可能无法打开或编码不支持）');
+          }
+          return;
+        }
         const rsp = await API.decodeSessionSeek(decoderSessionId, targetFrame, null);
         if (mySeq !== decodeSeq) return;
         if (!rsp?.ok) {
           frameEl.classList.remove('ready');
-          if (!quiet) setLoading(true, '视频帧解码失败');
+          if (!quiet) {
+            setLoading(true, '视频帧解码失败');
+            setStatus('帧解码失败：' + (rsp?.error || 'unknown'));
+          }
           return;
         }
+        if (!frameEl?.isConnected) return;
         if (Number(rsp.fps) > 0) fps = Number(rsp.fps);
         frameCount = Number(rsp.frame_count || frameCount || 0);
         curFrame = Math.max(0, Number(rsp.frame_idx || 0));
         frameEl.src = `data:image/jpeg;base64,${rsp.image_b64 || ''}`;
         frameEl.classList.add('ready');
-        applyMeta();
-        if (!quiet) setLoading(false);
+        applyMeta(forceWriteTemp);
       } finally {
         busy = false;
+        if (!quiet) setLoading(false);
+      }
+    }
+
+    async function decodeToFrame(targetFrame, quiet = false, opts = {}) {
+      const forceWT = !!opts.forceWriteTemp;
+      const forceOpenCv = !!opts.forceOpenCv;
+      if (!forceOpenCv && gpuReady && liveVideoEl) {
+        try {
+          const mf = maxFrame();
+          const raw = Number(targetFrame || 0);
+          const clamped = mf > 0 ? Math.max(0, Math.min(mf, raw)) : Math.max(0, raw);
+          const t = frameToTime(clamped);
+          logSyncSeek('decodeToFrame_gpu', {
+            requestedFrame: raw,
+            clampedFrame: clamped,
+            tSec: t,
+            forceWriteTemp: forceWT,
+          });
+          try { liveVideoEl.pause(); } catch (_) {}
+          switchToLiveMode();
+          try { liveVideoEl.classList.add('ready'); } catch (_) {}
+          liveVideoEl.currentTime = t;
+          curFrame = clamped;
+          applyMeta(forceWT);
+          decodeSeq += 1;
+          dbgSyncVideo('decodeToFrame_gpu', {
+            quiet,
+            forceWriteTemp: forceWT,
+            requestedFrame: raw,
+            clampedFrame: clamped,
+            tSec: t,
+            playing,
+            liveMode,
+            gpuReady,
+            curFrame,
+            video: _dbgVideoState(liveVideoEl),
+          });
+          return;
+        } catch (_) {
+          // live path unavailable, fall through
+        }
+      }
+      logSyncSeek('decodeToFrame_opencv', {
+        requestedFrame: Number(targetFrame || 0),
+        forceWriteTemp: forceWT,
+      });
+      await decodeToFrameCpu(targetFrame, quiet, forceWT);
+    }
+    async function decodeToFrameScrubCoalesced(targetFrame) {
+      scrubDecodeQueuedTarget = Number(targetFrame || 0);
+      if (scrubDecodeBusy) return;
+      scrubDecodeBusy = true;
+      try {
+        while (scrubDecodeQueuedTarget != null) {
+          const latest = scrubDecodeQueuedTarget;
+          scrubDecodeQueuedTarget = null;
+          await decodeToFrame(latest, false, { forceWriteTemp: true });
+        }
+      } finally {
+        scrubDecodeBusy = false;
       }
     }
 
@@ -866,12 +1520,78 @@ ${renderLapTagCard(s)}
       const refLapNum = Number(refLapSel?.value || _config?.session_info?.[s.csv_path]?.sync_ref_lap_num || 0);
       const picked = laps.find(l => Number(l.lap_num) === refLapNum);
       if (picked) return picked.elapsed_start || 0;
-      const firstTimed = laps.find(l => !l.is_outlap);
-      return (firstTimed?.elapsed_start) || (laps[0]?.elapsed_start) || 0;
+      // If selection/config is missing or invalid, fall back to the first lap (including outlap).
+      return (laps[0]?.elapsed_start) || 0;
+    }
+
+    /** 若 off+参考圈起点 < 0（视频只能 0s 起），自动换到第一个能对上的计时参考圈并写入配置 */
+    async function ensureRefLapFitsVideoZero(offForPick) {
+      const laps = _lapDetails[s.csv_path] || [];
+      if (!laps.length) return;
+      const o = Number(offForPick);
+      if (!Number.isFinite(o)) return;
+      const cfg = _config?.session_info?.[s.csv_path] || {};
+      const defaultRef = (laps.find(l => !l.is_outlap && !l.is_inlap)?.lap_num)
+        ?? laps.find(l => !l.is_outlap)?.lap_num
+        ?? laps[0]?.lap_num
+        ?? 1;
+      const preferred = Number(refLapSel?.value || cfg.sync_ref_lap_num || defaultRef) || Number(defaultRef);
+      const prefLap = laps.find(l => Number(l.lap_num) === preferred);
+      const prefE = prefLap ? (Number(prefLap.elapsed_start) || 0) : 0;
+      if (o + prefE >= -1e-3) return;
+      const newNum = pickAlignRefLapNumForOffset(o, laps, preferred);
+      if (newNum === preferred) return;
+      try {
+        await API.editSessionInfo(s.csv_path, { ...cfg, sync_ref_lap_num: newNum });
+        if (!_config.session_info) _config.session_info = {};
+        _config.session_info[s.csv_path] = { ...cfg, sync_ref_lap_num: newNum };
+        if (refLapSel) refLapSel.value = String(newNum);
+      } catch (_) { /* keep UI ref on failure */ }
+    }
+
+    // For auto-sync confirmation: always align to the first lap (including outlap).
+    function getAutoConfirmRefElapsed() {
+      const laps = _lapDetails[s.csv_path] || [];
+      return (laps[0]?.elapsed_start) || 0;
+    }
+    function logSyncSeek(tag, extra = {}) {
+      return;
     }
     async function seekToRefLap() {
-      if (s.sync_offset == null) return;
-      await decodeToFrame(timeToFrame(s.sync_offset + getRefLapElapsed()));
+      if (alignJpegTimer) {
+        clearTimeout(alignJpegTimer);
+        alignJpegTimer = null;
+      }
+      stopBeforeSeek();
+      const off = baselineOrActiveOffsetForSeek();
+      await ensureRefLapFitsVideoZero(off);
+      const refE = getRefLapElapsed();
+      const vt = clampVideoTimeSec(off + refE);
+      const target = timeToFrame(vt);
+      logSyncSeek('seekToRefLap', {
+        offsetUsed: off,
+        refLapElapsed: refE,
+        vtTargetSec: vt,
+        targetFrame: target,
+        gpuLive: !!(gpuReady && liveVideoEl),
+      });
+      dbgSyncVideo('seekToRefLap', {
+        off,
+        refE,
+        vt,
+        target,
+        playing,
+        liveMode,
+        gpuReady,
+        curFrame,
+        video: _dbgVideoState(liveVideoEl),
+      });
+      // Video-first: use <video> when gpuReady, otherwise fall back to OpenCV/JPEG.
+      await decodeToFrame(target, true);
+      // If <video> path was used and we're paused, WebView2 may need a small warm-up.
+      if (gpuReady && liveMode) {
+        try { await warmUpLivePaintOrFallback(); } catch (_) {}
+      }
     }
 
     (async () => {
@@ -882,23 +1602,25 @@ ${renderLapTagCard(s)}
         _syncDecoderSessionId = '';
         _syncDecoderVideoPath = '';
       }
-      if (!_syncDecoderSessionId && !isGpuOnly()) {
-        opened = await API.openDecodeSession(videoPath, 10);
-        if (!opened?.ok || !opened.session_id) {
-          if (!gpuReady) {
-            setLoading(true, '视频解码器启动失败');
-            return;
-          }
-        }
+      // Always open decode session to populate fps/frame_count for the scrubber.
+      // We prefer <video> for rendering (so this doesn't decode frames unless we fall back).
+      if (!_syncDecoderSessionId) {
+        opened = await API.openDecodeSession(videoPath, 10).catch(() => null);
         if (opened?.session_id) {
           _syncDecoderSessionId = opened.session_id;
           _syncDecoderVideoPath = videoPath;
+          if (Number(opened?.fps) > 0) fps = Number(opened.fps);
+          if (Number(opened?.frame_count) > 0) frameCount = Number(opened.frame_count);
         }
       }
       decoderSessionId = _syncDecoderSessionId;
+      if (!decoderSessionId && opened && opened.ok === false && opened.error) {
+        setStatus(`OpenCV 无法打开视频：${opened.error}（将尝试浏览器预览；仍失败请开「精确模式」）`);
+      }
       try {
         const info = await API.getVideoFps(videoPath);
         if (info?.ok && Number(info.fps) > 0) fps = Number(info.fps);
+        if (info?.ok && Number(info.frame_count) > 0) frameCount = Number(info.frame_count);
       } catch (_) {}
       if (Number.isFinite(opened?.fps) && Number(opened.fps) > 0) fps = Number(opened.fps);
       if (liveVideoEl && videoPath) {
@@ -925,30 +1647,112 @@ ${renderLapTagCard(s)}
           });
           if (gpuReady) {
             switchToLiveMode();
-            if (s.sync_offset != null) {
-              liveVideoEl.currentTime = Math.max(0, s.sync_offset + getRefLapElapsed());
-            } else {
-              liveVideoEl.currentTime = 0;
-            }
-            curFrame = Math.max(0, Math.min(maxFrame(), timeToFrame(liveVideoEl.currentTime || 0)));
+            // currentTime assignment is async; do not read liveVideoEl.currentTime here or applyMeta()
+            // will infer the wrong offset and clobber sync_offset via setTempOffset (baseline → 推算错位).
+            await ensureRefLapFitsVideoZero(baselineOrActiveOffsetForSeek());
+            const vt0 = clampVideoTimeSec(baselineOrActiveOffsetForSeek() + getRefLapElapsed());
+            // Seek to the aligned frame and WAIT for it to land before declaring ready,
+            // otherwise WebView2 may stay black until the next user interaction.
+            try { setLoading(true, '定位到对齐帧…'); } catch (_) {}
+            try { liveVideoEl.classList.remove('ready'); } catch (_) {}
+            liveVideoEl.currentTime = vt0;
+            try {
+              await new Promise(resolve => {
+                let done = false;
+                const finish = () => { if (done) return; done = true; resolve(); };
+                const onSeeked = () => finish();
+                try { liveVideoEl.addEventListener('seeked', onSeeked, { once: true }); } catch (_) {}
+                setTimeout(finish, 900);
+              });
+            } catch (_) {}
+
+            // After seek settles, derive curFrame from the actual video time.
+            const tSnap0 = Number(liveVideoEl.currentTime || vt0);
+            const tf0 = timeToFrame(tSnap0);
+            const mf0 = maxFrame();
+            curFrame = mf0 > 0 ? Math.max(0, Math.min(mf0, tf0)) : tf0;
             applyMeta();
+            applyVideoAspectRatioFromMeta();
+            try { liveVideoEl.classList.add('ready'); } catch (_) {}
+            // WebView2 may report metadata before first paint; don't eagerly fall back to JPEG.
+            await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+            const vw = liveVideoEl.videoWidth || 0;
+            const vh = liveVideoEl.videoHeight || 0;
+            if (vw >= 2 && vh >= 2) {
+              const tSnap = Number(liveVideoEl.currentTime || 0);
+              if (Number.isFinite(tSnap) && (tSnap > 0.02 || vt0 <= 0.02)) {
+                const drift = Math.abs(tSnap - vt0);
+                if (drift < 0.25 + 1 / Math.max(6, Number(fps) || 30)) {
+                  const mfs = maxFrame();
+                  const tfs = timeToFrame(tSnap);
+                  curFrame = mfs > 0 ? Math.max(0, Math.min(mfs, tfs)) : tfs;
+                }
+              }
+              applyMeta();
+            }
+            // After initial seek + metadata init, ensure a frame is painted in paused state.
+            if (!playing) {
+              try { await warmUpLivePaintOrFallback(); } catch (_) {}
+            }
+            try { setLoading(false); } catch (_) {}
+            logSyncSeek('init_panel_gpu', {
+              vt0TargetSec: vt0,
+              curFrameAfterInit: curFrame,
+              liveVideoCurrentTime: Number(liveVideoEl?.currentTime || 0),
+              videoWxH: `${liveVideoEl?.videoWidth || 0}x${liveVideoEl?.videoHeight || 0}`,
+              gpuReadyStill: gpuReady,
+            });
           }
         } catch (_) {
           gpuReady = false;
         }
       }
+      // If GPU init failed later, we already have (or re-used) decode session for fallback.
       if (!gpuReady) {
-        if (s.sync_offset != null) await seekToRefLap();
-        else await decodeToFrame(0);
+        await seekToRefLap();
       }
+      if (!decoderSessionId && !gpuReady) {
+        setStatus('校准视频无法打开：OpenCV 与浏览器预览均失败，请检查网络路径/编码或转为 H.264');
+      }
+      setLoading(false);
       if (liveVideoEl && videoPath) {
         try {
+          // Debug: always attach listeners; handler checks the toggle at runtime.
+          const handler = (ev) => {
+            if (!_dbgSyncVideoEnabled()) return;
+            dbgSyncVideo('video_event_' + ev.type, _dbgVideoState(liveVideoEl));
+          };
+          const types = [
+            'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough',
+            'playing', 'pause', 'waiting', 'stalled', 'suspend',
+            'seeking', 'seeked', 'timeupdate', 'ended', 'error',
+          ];
+          types.forEach(t => {
+            try { liveVideoEl.addEventListener(t, handler); } catch (_) {}
+          });
+          dbgSyncVideo('video_listeners_attached', _dbgVideoState(liveVideoEl));
+
           liveVideoEl.addEventListener('timeupdate', () => {
             if (!liveMode) return;
             const t = Number(liveVideoEl.currentTime || 0);
             if (!Number.isFinite(t)) return;
             curFrame = Math.max(0, Math.min(maxFrame(), timeToFrame(t)));
             applyMeta();
+          });
+          liveVideoEl.addEventListener('playing', () => {
+            // Video has rendered enough to be visible.
+            playStarting = false;
+            applyVideoAspectRatioFromMeta();
+            try { liveVideoEl.classList.add('ready'); } catch (_) {}
+            dbgSyncVideo('video_event_playing', _dbgVideoState(liveVideoEl));
+          });
+          liveVideoEl.addEventListener('loadeddata', () => {
+            applyVideoAspectRatioFromMeta();
+            try { liveVideoEl.classList.add('ready'); } catch (_) {}
+          });
+          liveVideoEl.addEventListener('canplay', () => {
+            applyVideoAspectRatioFromMeta();
+            try { liveVideoEl.classList.add('ready'); } catch (_) {}
           });
           liveVideoEl.addEventListener('seeked', () => {
             if (!liveMode) return;
@@ -961,8 +1765,10 @@ ${renderLapTagCard(s)}
             if (playing) stopPlayback();
           });
           liveVideoEl.addEventListener('pause', () => {
-            if (playing && !liveVideoEl.ended) return;
-            if (playing) stopPlayback();
+            // If pause fires during play startup, don't treat it as a user pause (avoids AbortError loops).
+            if (playStarting) return;
+            if (!playing) return;
+            stopPlayback({ bumpDecode: false });
           });
         } catch (_) {}
       }
@@ -974,67 +1780,204 @@ ${renderLapTagCard(s)}
       await API.editSessionInfo(s.csv_path, { ...existing, sync_ref_lap_num: n });
       if (!_config.session_info) _config.session_info = {};
       _config.session_info[s.csv_path] = { ...existing, sync_ref_lap_num: n };
-      await seekToRefLap();
+      const ui = beginSyncSeekUi();
+      try {
+        await seekToRefLap();
+      } finally {
+        if (ui) endSyncSeekUi();
+      }
     });
 
-    scrub?.addEventListener('input', async () => {
+    /** Apply numeric offset from「本节信息」内联编辑；跳转视频到 ref 对齐位置 */
+    async function applyOffsetFromValue(v) {
+      if (!Number.isFinite(v)) return;
       stopPlayback();
-      const target = parseInt(scrub.value || '0', 10) || 0;
-      if (gpuReady && liveVideoEl) {
-        switchToLiveMode();
-        liveVideoEl.currentTime = frameToTime(target);
-        curFrame = target;
-        applyMeta();
-        return;
+      await ensureRefLapFitsVideoZero(v);
+      setTempOffset(v);
+      const refE = getRefLapElapsed();
+      const vt = clampVideoTimeSec(v + refE);
+      const target = timeToFrame(vt);
+      logSyncSeek('applyOffsetFromValue', {
+        inputOffset: v,
+        refLapElapsed: refE,
+        vtTargetSec: vt,
+        targetFrame: target,
+      });
+      // Video-first seek; keep this operation "non-precise" even when 精确模式开启.
+      // For the fallback case we still want temp offset to be visible, so forceWriteTemp=true.
+      dbgSyncVideo('applyOffsetFromValue', {
+        v,
+        refE,
+        vt,
+        target,
+        playing,
+        liveMode,
+        gpuReady,
+        curFrame,
+        video: _dbgVideoState(liveVideoEl),
+      });
+      await decodeToFrame(target, true, { forceWriteTemp: true });
+      if (gpuReady && liveMode) {
+        try { await warmUpLivePaintOrFallback(); } catch (_) {}
       }
-      await decodeToFrame(target);
+    }
+    pane._openlapApplyOffset = applyOffsetFromValue;
+
+    scrub?.addEventListener('pointerdown', (e) => {
+      try { scrub.setPointerCapture(e.pointerId); } catch (_) {}
+      scrubPointerHeld = true;
+      refreshSeekStepButtonsDisabled();
+    });
+    const _scrubPointerEnd = () => {
+      if (!scrubPointerHeld) return;
+      scrubPointerHeld = false;
+      if (!syncSeekUiHeld) setSeekStepButtonsDisabled(false);
+    };
+    scrub?.addEventListener('pointerup', (e) => {
+      try { scrub.releasePointerCapture(e.pointerId); } catch (_) {}
+      _scrubPointerEnd();
+    });
+    scrub?.addEventListener('pointercancel', _scrubPointerEnd);
+    scrub?.addEventListener('lostpointercapture', _scrubPointerEnd);
+
+    scrub?.addEventListener('input', async () => {
+      stopBeforeSeek();
+      const target = parseInt(scrub.value || '0', 10) || 0;
+      logSyncVideoUI('ui_scrub_input', { target, playing, liveMode, gpuReady, curFrame, video: _dbgVideoState(liveVideoEl) });
+      try {
+        const tReq = frameToTime(target);
+        const t = clampVideoTimeSec(tReq);
+        const nextFrame = Math.max(0, Math.min(maxFrame(), timeToFrame(t)));
+        // Important: set temp offset first so applyMeta doesn't lock out auto-saved offsets.
+        setTempOffset(frameToTime(nextFrame) - getRefLapElapsed());
+
+        if (gpuReady && liveVideoEl) {
+          switchToLiveMode();
+          liveVideoEl.currentTime = t;
+          curFrame = nextFrame;
+          applyMeta();
+          dbgSyncVideo('scrub_gpu', {
+            target,
+            tReq,
+            t,
+            nextFrame,
+            playing,
+            liveMode,
+            gpuReady,
+            curFrame,
+            video: _dbgVideoState(liveVideoEl),
+          });
+        } else {
+          // Fallback: when <video> can't be used, still update panel via OpenCV/JPEG.
+          await decodeToFrame(nextFrame, true);
+          dbgSyncVideo('scrub_fallback', {
+            target,
+            tReq,
+            t,
+            nextFrame,
+            playing,
+            liveMode,
+            gpuReady,
+            curFrame,
+            video: _dbgVideoState(liveVideoEl),
+          });
+        }
+      } catch (_) {
+        // ignore
+      }
     });
 
     async function step(frameDelta, quiet = false) {
-      if (gpuReady && liveVideoEl) {
-        try {
-          const f = Math.max(1e-6, Number(fps) || 30);
-          const curT = Number(liveVideoEl.currentTime || 0);
-          const nextT = Math.max(0, curT + (Number(frameDelta || 0) / f));
-          try { liveVideoEl.pause(); } catch (_) {}
-          switchToLiveMode();
-          liveVideoEl.currentTime = nextT;
-          curFrame = Math.max(0, Math.min(maxFrame(), timeToFrame(nextT)));
-          applyMeta();
-          return;
-        } catch (_) {
-          // fallback below
-        }
+      let uiStarted = false;
+      if (!quiet) {
+        if (busy || syncSeekUiHeld) return;
+        uiStarted = beginSyncSeekUi();
       }
-      if (!decoderSessionId) return;
-      if (Math.abs(frameDelta) > 10) {
-        const jump = Math.round((frameDelta > 0 ? 1 : -1) * Math.max(1, fps));
-        await decodeToFrame(curFrame + jump, quiet);
-        return;
-      }
-      if (busy) return;
-      const mySeq = decodeSeq;
-      busy = true;
       try {
-        const rsp = await API.decodeSessionStep(decoderSessionId, frameDelta > 0 ? 1 : -1);
-        if (mySeq !== decodeSeq) return;
-        if (!rsp?.ok) return;
-        if (Number(rsp.fps) > 0) fps = Number(rsp.fps);
-        frameCount = Number(rsp.frame_count || frameCount || 0);
-        curFrame = Math.max(0, Number(rsp.frame_idx || 0));
-        frameEl.src = `data:image/jpeg;base64,${rsp.image_b64 || ''}`;
-        applyMeta();
+        const d = Number(frameDelta || 0);
+        const absDelta = Math.abs(d);
+        const wantsPreciseFrame = preciseMode && !quiet && absDelta > 0 && absDelta <= 1.01;
+        if (wantsPreciseFrame) {
+          const dir = d > 0 ? 1 : -1;
+          await decodeToFrame(curFrame + dir, true, { forceWriteTemp: true, forceOpenCv: true });
+          return;
+        }
+
+        if (gpuReady && liveVideoEl) {
+          try {
+            const f = Math.max(1e-6, Number(fps) || 30);
+            const curT = Number(liveVideoEl.currentTime || 0);
+            const nextT = Math.max(0, curT + (Number(frameDelta || 0) / f));
+            try { liveVideoEl.pause(); } catch (_) {}
+            switchToLiveMode();
+            liveVideoEl.currentTime = nextT;
+            curFrame = Math.max(0, Math.min(maxFrame(), timeToFrame(nextT)));
+            setTempOffset(frameToTime(curFrame) - getRefLapElapsed());
+            applyMeta();
+            if (!quiet && liveVideoEl) {
+              await new Promise((resolve) => {
+                let done = false;
+                const fin = () => {
+                  if (done) return;
+                  done = true;
+                  try { liveVideoEl.removeEventListener('seeked', fin); } catch (_) {}
+                  resolve();
+                };
+                liveVideoEl.addEventListener('seeked', fin, { once: true });
+                setTimeout(fin, 120);
+              });
+            }
+            return;
+          } catch (_) {
+            // fallback below
+          }
+        }
+
+        // Non-precise jumps: video-first already failed; fall back to decodeToFrame().
+        // This keeps 精确模式的“仅按帧走 OpenCV”规则：只有 wantsPreciseFrame 才会 forceOpenCv。
+        const f = Math.max(1e-6, Number(fps) || 30);
+        const curT = frameToTime(curFrame);
+        const dt = Number(frameDelta || 0) / f;
+        const nextT = Math.max(0, curT + dt);
+        const nextFrame = Math.max(0, Math.min(maxFrame(), timeToFrame(nextT)));
+        setTempOffset(frameToTime(nextFrame) - getRefLapElapsed());
+        await decodeToFrame(nextFrame, quiet);
+        return;
       } finally {
-        busy = false;
+        if (uiStarted) endSyncSeekUi();
       }
     }
 
-    pane.querySelector('#sv-mm')?.addEventListener('click', () => { stopPlayback(); step(-fps); });
-    pane.querySelector('#sv-m')?.addEventListener('click', () => { stopPlayback(); step(-1); });
-    pane.querySelector('#sv-p')?.addEventListener('click', () => { stopPlayback(); step(1); });
-    pane.querySelector('#sv-pp')?.addEventListener('click', () => { stopPlayback(); step(fps); });
+    pane.querySelector('#sv-mm')?.addEventListener('click', async () => {
+      logSyncVideoUI('ui_click_-1s', { fps, playing, liveMode, gpuReady, curFrame, video: _dbgVideoState(liveVideoEl) });
+      stopBeforeSeek();
+      await step(-fps);
+    });
+    pane.querySelector('#sv-m')?.addEventListener('click', async () => {
+      logSyncVideoUI('ui_click_-1f', { fps, playing, liveMode, gpuReady, curFrame, video: _dbgVideoState(liveVideoEl) });
+      stopBeforeSeek();
+      await step(-1);
+    });
+    pane.querySelector('#sv-p')?.addEventListener('click', async () => {
+      logSyncVideoUI('ui_click_+1f', { fps, playing, liveMode, gpuReady, curFrame, video: _dbgVideoState(liveVideoEl) });
+      stopBeforeSeek();
+      await step(1);
+    });
+    pane.querySelector('#sv-pp')?.addEventListener('click', async () => {
+      logSyncVideoUI('ui_click_+1s', { fps, playing, liveMode, gpuReady, curFrame, video: _dbgVideoState(liveVideoEl) });
+      stopBeforeSeek();
+      await step(fps);
+    });
     playBtn?.addEventListener('click', () => {
-      if (playing) stopPlayback();
+      logSyncVideoUI('ui_click_play_toggle', {
+        playing,
+        liveMode,
+        gpuReady,
+        curFrame,
+        video: _dbgVideoState(liveVideoEl),
+        boxes: { video: _domBox(liveVideoEl), frame: _domBox(frameEl), loading: _domBox(loadingEl) },
+      });
+      if (playing) stopPlayback({ bumpDecode: false });
       else startPlayback();
     });
     autoSyncBtn?.addEventListener('click', async () => {
@@ -1068,10 +2011,13 @@ ${renderLapTagCard(s)}
     pane.querySelector('#sv-mark')?.addEventListener('click', async () => {
       stopPlayback();
       const rawTime = frameToTime(curFrame);
+      // Confirm should lock against the currently selected reference lap.
+      // Using lap-1 baseline for auto results can flip sign/magnitude unexpectedly.
       const refElapsed = getRefLapElapsed();
       const offset = rawTime - refElapsed;
       s.sync_offset = offset;
       s.sync_source = 'user';
+      try { delete s._temp_sync_offset; } catch (_) { s._temp_sync_offset = undefined; }
       await saveOffset(s);
       renderLeft();
       renderRight();
@@ -1087,9 +2033,17 @@ ${renderLapTagCard(s)}
   // run before video.load() finished.  This function does one final check and
   // seeks if the element is now ready.
   function _seekVideoAfterAutoSync(s, syncOffset) {
-    // Pure frame-player mode re-renders right panel and wireVideoSync seeks by syncOffset.
-    // Keep this hook as a no-op for compatibility with existing event flow.
-    return;
+    const off = Number(syncOffset);
+    if (!Number.isFinite(off)) return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(async () => {
+        if (!_container) return;
+        if (_normCsvPathKey(s.csv_path) !== _normCsvPathKey(_selCsv || '')) return;
+        const pane = _container.querySelector('#data-right');
+        const fn = pane && pane._openlapApplyOffset;
+        if (typeof fn === 'function') await fn(off);
+      });
+    });
   }
 
   async function saveOffset(s) {
@@ -1159,11 +2113,8 @@ ${renderLapTagCard(s)}
           _meta[s.csv_path] = m;
           // Write track back into the session object so it persists in the cache
           if (m.track) s.track = m.track;
-          // Mirror sync fields from config in case they updated since last scan
-          if (_config?.offsets?.[s.csv_path] != null) {
-            s.sync_offset = _config.offsets[s.csv_path];
-            s.sync_source = _config.offset_sources?.[s.csv_path] ?? s.sync_source;
-          }
+          // Refresh sync fields from config if they changed since last scan
+          _applyStoredSyncToSession(s);
         } catch (err) {
           console.warn('getSessionMeta failed for', s.csv_path, err);
         }
@@ -1217,13 +2168,8 @@ ${renderLapTagCard(s)}
         if (s.laps) _meta[s.csv_path].laps = s.laps;
         if (s.best) _meta[s.csv_path].best = s.best;
       }
-      // Apply stored offsets and sources
-      for (const s of _sessions) {
-        if (_config?.offsets?.[s.csv_path] != null) {
-          s.sync_offset = _config.offsets[s.csv_path];
-          s.sync_source = _config.offset_sources?.[s.csv_path] ?? s.sync_source;
-        }
-      }
+      // Apply stored offsets and sources (path-variant keys)
+      for (const s of _sessions) _applyStoredSyncToSession(s);
       // Publish to global State so other pages (e.g. export) can access the list
       State.set('sessions', _sessions);
       _metaQueue = []; // reset queue so new sessions get fetched
@@ -1234,11 +2180,28 @@ ${renderLapTagCard(s)}
       API.saveSessionsCache(_sessions).catch(() => {});
       // Trigger background auto-sync if enabled
       if (_config?.auto_sync_enabled) {
-        const candidates = _sessions.filter(s => s.matched && s.video_paths?.length);
+        // IMPORTANT UX: if a session already has a saved offset, do NOT start background auto-sync for it.
+        // (Manual "自动对齐/重新对齐" button can still be used explicitly.)
+        const candidates = _sessions.filter(s => {
+          if (!(s.matched && s.video_paths?.length)) return false;
+          const saved = (s.sync_offset != null && Number.isFinite(Number(s.sync_offset)));
+          return !saved;
+        });
+        const blocked = {
+          disabled: '全局自动同步已关闭',
+        };
+        if (candidates.length === 0) return;
         API.startAutoSync(candidates).then(r => {
           if (r?.queued > 0) {
             _autoSyncing = true;
-            setStatus(`已找到 ${_sessions.length} 节，正在自动同步 ${r.queued} 节…`);
+            const rq = r.reason === 'queued_after_export'
+              ? `已排队 ${r.queued} 节（导出结束后自动运行，已保存偏移不变）`
+              : r.reason === 'queued'
+                ? `已排队 ${r.queued} 节（当前同步批结束后自动继续）`
+                : `正在自动同步 ${r.queued} 节…`;
+            setStatus(`已找到 ${_sessions.length} 节，${rq}`);
+          } else if (blocked[r?.reason]) {
+            setStatus(`已找到 ${_sessions.length} 节。自动同步未启动（${blocked[r.reason]}）。`);
           }
         }).catch(() => {});
       }
@@ -1562,6 +2525,7 @@ ${renderLapTagCard(s)}
 
   async function mount(container) {
     _container = container;
+    _pageUnmounted = false;
 
     container.innerHTML = `
 <div class="page data-page">
@@ -1644,16 +2608,46 @@ ${renderLapTagCard(s)}
     }));
 
     // Listen to auto-sync push events to update session status in real-time
-    let _asIdx = 0, _asTotal = 0, _asDone = 0, _asFailed = 0;
+    let _asIdx = 0, _asTotal = 0, _asDone = 0, _asFailed = 0, _asSkipped = 0;
     _unlistenFns.push(API.on('auto_sync_progress', detail => {
-      const s = _sessions.find(x => x.csv_path === detail.csv_path);
+      const s = _findSessionByCsvPath(detail.csv_path);
       if (!s) return;
       if (detail.status === 'processing') {
-        _asIdx = detail.current; _asTotal = detail.total;
+        const curN = Number(detail.current);
+        const totN = Number(detail.total);
+        if (Number.isFinite(curN) && Number.isFinite(totN) && totN > 0) {
+          if (curN === 1) {
+            _asDone = 0;
+            _asFailed = 0;
+            _asSkipped = 0;
+          }
+          _asIdx = curN;
+          _asTotal = totN;
+        }
+        _setAutoSyncUiFor(s.csv_path, {
+          running: true,
+          current: _asIdx,
+          total: _asTotal,
+          status: 'processing',
+          text: `第 ${_asIdx}/${_asTotal} 节：准备分析… 手动校准已暂时锁定`,
+          pct: _asTotal ? ((_asIdx - 1) / _asTotal) * 100 : null,
+        });
+        _updateAutoSyncOverlayIfVisible(s.csv_path);
         setStatus(`自动同步中：第 ${_asIdx}/${_asTotal} 节…`);
       } else if (detail.status === 'checking') {
-        const conf = detail.confidence?.toFixed(2);
-        const secs = detail.vid_t?.toFixed(0);
+        const curN = Number(detail.current);
+        const totN = Number(detail.total);
+        if (Number.isFinite(curN) && Number.isFinite(totN) && totN > 0 && curN > 0) {
+          _asIdx = curN;
+          _asTotal = totN;
+        }
+        const isMetaStage = detail.stage === 'metadata';
+        const conf = detail.confidence != null && !isNaN(detail.confidence)
+          ? Number(detail.confidence).toFixed(2)
+          : '—';
+        const secs = detail.vid_t != null && !isNaN(detail.vid_t)
+          ? Number(detail.vid_t).toFixed(0)
+          : '—';
         const mode = detail.mode || '';
         const baseTxt = Number.isFinite(detail.baseline_offset)
           ? `，基准 ${detail.baseline_offset >= 0 ? '+' : ''}${detail.baseline_offset.toFixed(3)}s`
@@ -1663,39 +2657,94 @@ ${renderLapTagCard(s)}
           : '';
         const stageTxt = detail.stage ? ` [${detail.stage}]` : '';
         const modeTxt = mode ? ` (${mode})` : '';
-        setStatus(`自动同步中：第 ${_asIdx}/${_asTotal} 节${stageTxt}${modeTxt} — 已解码 ${secs}s 视频，置信度 ${conf}×（需 6×）${baseTxt}${winTxt}`);
+        const progressTxt = isMetaStage
+          ? `第 ${_asIdx}/${_asTotal} 节${stageTxt}${modeTxt}：读取元数据 / 准备解码…`
+          : `第 ${_asIdx}/${_asTotal} 节${stageTxt}${modeTxt}：已解码 ${secs}s，置信度 ${conf}×（需 6×）`;
+        const statusBarTxt = isMetaStage
+          ? `自动同步中：第 ${_asIdx}/${_asTotal} 节${stageTxt}${modeTxt} — 读取元数据 / 准备解码${baseTxt}${winTxt}`
+          : `自动同步中：第 ${_asIdx}/${_asTotal} 节${stageTxt}${modeTxt} — 已解码 ${secs}s 视频，置信度 ${conf}×（需 6×）${baseTxt}${winTxt}`;
+        _setAutoSyncUiFor(s.csv_path, {
+          running: true,
+          current: _asIdx,
+          total: _asTotal,
+          status: 'checking',
+          text: progressTxt,
+          pct: _asTotal ? ((_asIdx - 1) / _asTotal) * 100 : null,
+        });
+        _updateAutoSyncOverlayIfVisible(s.csv_path);
+        setStatus(statusBarTxt);
       } else if (detail.status === 'done') {
         _asDone++;
-        // Don't overwrite if the user already confirmed this session while we were processing
-        if (s.sync_source !== 'user') {
-          s.sync_offset = detail.offset;
-          s.sync_source = 'auto';
-          // Keep previewSession in sync so editor gets the detected offset
-          const prev = State.get('previewSession');
-          if (prev?.csv_path === s.csv_path) {
-            State.set('previewSession', { ...prev, video_paths: s.video_paths || prev.video_paths, sync_offset: detail.offset });
-          }
-          renderLeft();
-          renderRight();
-          // If the video element is already loaded (WebView2 cache), wireVideoSync's
-          // readyState check runs before load() triggers metadata — seek it now.
-          _seekVideoAfterAutoSync(s, detail.offset);
+        // status=done means Python already persisted — mirror it. (Conflicts use status=skipped.)
+        // Do not gate on s.sync_source: backend may replace placeholder user (~0) with auto_baseline
+        // while this row still had sync_source 'user' from the last scan.
+        s.sync_offset = detail.offset;
+        s.sync_source = detail.offset_source || 'auto';
+        try { delete s._temp_sync_offset; } catch (_) { s._temp_sync_offset = undefined; }
+        if (_config) {
+          _config.offsets = { ...(_config.offsets || {}), [s.csv_path]: detail.offset };
+          _config.offset_sources = { ...(_config.offset_sources || {}), [s.csv_path]: s.sync_source };
         }
+        const prev = State.get('previewSession');
+        if (prev && _normCsvPathKey(prev.csv_path) === _normCsvPathKey(s.csv_path)) {
+          State.set('previewSession', { ...prev, video_paths: s.video_paths || prev.video_paths, sync_offset: detail.offset });
+        }
+        renderLeft();
+        renderRight();
+        _seekVideoAfterAutoSync(s, detail.offset);
         const off = detail.offset >= 0 ? `+${detail.offset.toFixed(3)}s` : `${detail.offset.toFixed(3)}s`;
-        setStatus(`自动同步：检测到偏移 ${off}，置信度 ${detail.confidence?.toFixed(2)}×`);
+        _setAutoSyncUiFor(s.csv_path, { running: false, status: 'done', text: `已完成：${off}` , pct: _asTotal ? (_asIdx / _asTotal) * 100 : 100 });
+        _updateAutoSyncOverlayIfVisible(s.csv_path);
+        const metaAnchored = syncIsBaselineAuto(s.sync_source);
+        setStatus(
+          `自动同步：已采用 ${off}${metaAnchored ? '（元数据锚定）' : ''} 作为本节偏移（置信度 ${detail.confidence?.toFixed(2)}×）。可直接预览；若要配合 seek/对齐圈再抠，进校准页即可。`,
+        );
       } else if (detail.status === 'failed') {
         _asFailed++;
         s.auto_sync_failed = true;
+        _setAutoSyncUiFor(s.csv_path, { running: false, status: 'failed', text: `未找到高置信匹配，已解锁手动校准`, pct: _asTotal ? (_asIdx / _asTotal) * 100 : 100 });
+        _updateAutoSyncOverlayIfVisible(s.csv_path);
         setStatus(`自动同步：未找到高置信匹配（${detail.confidence?.toFixed(2)}×），请手动设置偏移`);
+        renderLeft();
+        renderRight();
+      } else if (detail.status === 'skipped') {
+        _asSkipped++;
+        const off = detail.offset;
+        const offStr = off == null || isNaN(off) ? '—' : (off >= 0 ? `+${Number(off).toFixed(3)}s` : `${Number(off).toFixed(3)}s`);
+        const stored = detail.stored_offset;
+        const storedStr = stored == null || isNaN(stored)
+          ? '—'
+          : (stored >= 0 ? `+${Number(stored).toFixed(3)}s` : `${Number(stored).toFixed(3)}s`);
+        const sub =
+          detail.reason === 'user_offset_locked'
+            ? `已算出 ${offStr}，但未写入（保留用户偏移 ${storedStr}）`
+            : '已跳过写入';
+        _setAutoSyncUiFor(s.csv_path, {
+          running: false,
+          status: 'skipped',
+          text: sub,
+          pct: _asTotal ? (_asIdx / _asTotal) * 100 : 100,
+        });
+        _updateAutoSyncOverlayIfVisible(s.csv_path);
+        setStatus(`自动同步：${sub}`);
         renderLeft();
         renderRight();
       }
     }));
     _unlistenFns.push(API.on('auto_sync_done', () => {
       _autoSyncing = false;
-      const summary = _asDone > 0 || _asFailed > 0
-        ? ` — 成功 ${_asDone}，失败 ${_asFailed}`
-        : '';
+      _autoSyncByCsv = {};
+      // If user is on the align panel, ensure it's unlocked
+      if (_selCsv) {
+        _updateAutoSyncOverlayIfVisible(_selCsv);
+        renderRight();
+        renderLeft();
+      }
+      const parts = [];
+      if (_asDone > 0) parts.push(`成功 ${_asDone}`);
+      if (_asSkipped > 0) parts.push(`跳过 ${_asSkipped}`);
+      if (_asFailed > 0) parts.push(`失败 ${_asFailed}`);
+      const summary = parts.length ? ` — ${parts.join('，')}` : '';
       setStatus(`已找到 ${_sessions.length} 节。自动同步完成${summary}。`);
     }));
 
@@ -1718,10 +2767,7 @@ ${renderLapTagCard(s)}
 
     // Apply stored offsets to sessions immediately
     const applyOffsets = () => {
-      for (const s of _sessions) {
-        if (_config?.offsets?.[s.csv_path] != null)
-          s.sync_offset = _config.offsets[s.csv_path];
-      }
+      for (const s of _sessions) _applyStoredSyncToSession(s);
     };
 
     try {
@@ -1747,6 +2793,7 @@ ${renderLapTagCard(s)}
   }
 
   function unmount() {
+    _pageUnmounted = true;
     if (_container?._resizerCleanup) _container._resizerCleanup();
     _unlistenFns.forEach(fn => fn());
     _unlistenFns = [];

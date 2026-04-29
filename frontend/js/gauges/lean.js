@@ -1,7 +1,7 @@
 /**
  * lean.js — Motorcycle lean angle visualisation.
  *
- * Mirrors styles/gauge_lean.py
+ * Editor Canvas preview; ``data`` keys match ``styles/gauge_lean.py`` / export.
  *
  * data keys: value (degrees, positive = right), label, unit, min_val, max_val
  */

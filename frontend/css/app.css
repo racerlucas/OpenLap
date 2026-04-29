@@ -388,13 +388,10 @@ body {
 }
 .sync-video {
   width: 100%;
-  border-radius: 4px;
   background: #000;
-  flex: 1;
-  min-height: 60px;
+  height: 100%;
   object-fit: contain;
   display: block;
-  margin-bottom: 6px;
   opacity: 0;
   transition: opacity 160ms ease;
 }
@@ -409,6 +406,15 @@ body {
   border-radius: 4px;
   overflow: hidden;
   background: #000;
+  /* Keep the aligned preview in the video's native aspect ratio.
+     JS sets --sync-ar to "width / height" after metadata is available. */
+  aspect-ratio: var(--sync-ar, 16 / 9);
+}
+
+/* Ensure the visual media fully covers the wrap box without affecting layout. */
+.sync-frame-wrap > .sync-video {
+  position: absolute;
+  inset: 0;
 }
 .sync-loading {
   position: absolute;
@@ -420,6 +426,62 @@ body {
   color: var(--text2);
   font-size: 11px;
   background: linear-gradient(180deg, rgba(0,0,0,0.35), rgba(0,0,0,0.55));
+}
+
+/* Auto-sync overlay in align card */
+.sync-autosync-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: stretch;
+  padding: 10px;
+  background: linear-gradient(180deg, rgba(0,0,0,0.20), rgba(0,0,0,0.62));
+  pointer-events: none; /* overlay should not trap focus; controls are disabled in JS */
+}
+.sync-autosync-panel {
+  width: 100%;
+  border-radius: 6px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255,183,77,0.35);
+  background: rgba(10,10,14,0.55);
+  backdrop-filter: blur(6px);
+}
+.sync-autosync-title {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #ffcc80;
+  margin-bottom: 4px;
+}
+.sync-autosync-sub {
+  font-size: 10px;
+  color: rgba(255,255,255,0.82);
+  line-height: 1.4;
+  margin-bottom: 6px;
+}
+.sync-autosync-bar {
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.06);
+}
+.sync-autosync-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #ffb74d, #4f8ef7);
+  border-radius: 999px;
+  transition: width 180ms ease;
+}
+.sync-autosync-bar-fill.indeterminate {
+  width: 40%;
+  animation: sync-indeterminate 900ms ease-in-out infinite;
+}
+@keyframes sync-indeterminate {
+  0%   { transform: translateX(-25%); opacity: 0.55; }
+  50%  { transform: translateX(35%);  opacity: 0.95; }
+  100% { transform: translateX(95%);  opacity: 0.55; }
 }
 .sync-spinner {
   width: 14px;
@@ -451,6 +513,27 @@ body {
 }
 .sync-mark-val { font-size: 9px; color: var(--ok); }
 .sync-off-input { width: 72px !important; flex: none !important; }
+.sync-offset-readout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(79, 142, 247, 0.07);
+  border: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--text2);
+}
+.sync-offset-readout-lbl { flex-shrink: 0; }
+.sync-off-readout-code {
+  font-size: 12px;
+  font-family: var(--mono);
+  color: var(--acc2);
+  font-variant-numeric: tabular-nums;
+}
 
 /* Footer */
 .data-footer {

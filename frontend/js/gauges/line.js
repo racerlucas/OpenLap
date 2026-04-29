@@ -1,7 +1,7 @@
 /**
  * line.js — Area chart of channel history with value readout.
  *
- * Mirrors styles/gauge_line.py
+ * Editor Canvas preview; ``data`` keys match ``styles/gauge_line.py`` / export.
  *
  * data keys: value, history_vals, label, unit, min_val, max_val, symmetric, channel
  * theme keys: bg, bgEdge, track, fillPos, fillNeg, fillLo, fillHi, label, unit

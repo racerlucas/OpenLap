@@ -1,16 +1,15 @@
 /**
- * base.js — Shared Canvas drawing utilities for all gauge styles.
+ * base.js — Shared Canvas drawing utilities for overlay *editor preview* gauges.
  *
- * All gauge render functions share this signature:
  *   render(ctx, data, w, h)
  *
- * Where:
- *   ctx  — CanvasRenderingContext2D already sized to (w, h)
- *   data — JS object matching the data dict passed by overlay_worker.py
- *   w, h — pixel dimensions of this gauge's canvas region
+ * ``data`` keys align with what Python builds for export (``gauge_channels`` /
+ * ``build_history_row`` / ``gauge_data``). Canvas helpers here are *presentation*;
+ * they are loosely analogous to ``overlay_themes.py`` / matplotlib styles, not
+ * locked to identical geometry or colours.
  */
 
-// ── Theme colours (mirrors overlay_themes.py) ─────────────────────────────────
+// ── Theme colours (cousin of overlay_themes.py — editor UX only) ───────────
 const THEMES = {
   Dark: {
     bg:       'rgba(13, 18, 31, 0.74)',
@@ -130,7 +129,7 @@ function roundRect(ctx, x, y, w, h, r) {
 
 /**
  * Fill a rounded pill background with a thin border.
- * Mirrors the FancyBboxPatch used in all matplotlib gauges.
+ * Similar look to matplotlib FancyBboxPatch in export styles — not identical geometry.
  */
 function drawBackground(ctx, w, h, theme) {
   const pad = Math.max(2, Math.round(w * 0.02));
@@ -168,8 +167,8 @@ function drawAccentBar(ctx, w, h, color) {
 }
 
 /**
- * Scale font size proportionally to gauge dimensions.
- * Mirrors scale_factor() from overlay_utils.py.
+ * Scale font size proportionally to gauge dimensions
+ * (same sqrt-area idea as ``overlay_utils.scale_factor`` for export).
  *
  * @param {number} baseSize   — reference font size at base dimensions
  * @param {number} w          — actual width
@@ -184,8 +183,8 @@ function scaleFont(baseSize, w, h, baseW = 120, baseH = 160) {
 }
 
 /**
- * Format a numeric gauge value to a display string.
- * Mirrors the formatting logic in gauge_numeric.py.
+ * Format a numeric gauge value for on-screen preview.
+ * Keep rules compatible with ``styles/gauge_numeric.py`` so numbers read the same as export.
  *
  * @param {number} value
  * @param {string} channel
