@@ -2440,16 +2440,35 @@ ${renderLapTagCard(s)}
     });
   }
 
+  function _isGpxVboPath(p) {
+    const lower = String(p || '').toLowerCase();
+    return lower.endsWith('.gpx') || lower.endsWith('.vbo');
+  }
+
+  function _pickManualLapSplitTelemetryPath() {
+    if (_isGpxVboPath(_selCsv)) return _selCsv;
+    if (_splitSel.size === 1) {
+      const only = [..._splitSel][0];
+      if (_isGpxVboPath(only)) return only;
+    }
+    return '';
+  }
+
   async function launchManualLapSplitGui() {
     const btn = _container?.querySelector('#lap-split-btn');
     try {
       if (btn) btn.setAttribute('disabled', '');
+      const tel = _pickManualLapSplitTelemetryPath();
+      if (!tel) {
+        setStatus('手动切圈需要当前节或唯一勾选的节为 .gpx/.vbo；多节时请先在左侧点选一节。');
+        return;
+      }
       setStatus('正在启动手动画线切圈工具…');
-      const res = await API.launchManualLapSplitGui();
+      const res = await API.launchManualLapSplitGui(tel);
       if (res?.started) {
-        setStatus('已启动手动画线工具（在 GPX/VBO 轨迹上画线）。保存后回到这里点“扫描”。');
+        setStatus('已启动手动画线工具，并已加载当前节的 GPX/VBO 轨迹。保存后回到这里点“扫描”。');
       } else {
-        setStatus('手动画线工具启动失败。');
+        setStatus('手动画线工具启动失败' + (res?.error ? `：${res.error}` : '') + '。');
       }
     } catch (e) {
       setStatus('手动画线工具启动失败：' + String(e));
