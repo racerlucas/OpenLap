@@ -2487,7 +2487,7 @@ ${renderLapTagCard(s)}
           }
         }
       } else {
-        setStatus('tracks 目录未发现赛道 JSON，改为手动选择…');
+        setStatus('未在 ~/.openlap/tracks/ 发现赛道 JSON，改为手动选择…');
         jsonPath = await API.openFileDialog(['赛道 JSON (*.json)']);
         if (!jsonPath) return;
       }

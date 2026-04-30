@@ -1,7 +1,10 @@
 import os
 import sys
+import json
+import re
+from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 from typing import Optional
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
@@ -196,6 +199,49 @@ class LapSplitGUI:
             lap_utils.save_vbo(save_path, self.points, self.column_names, self.header_lines)
             
         messagebox.showinfo("完成", f"文件已保存到：\n{save_path}")
+
+        # Optional: save the user-drawn start/finish line as a minimal track JSON.
+        # IMPORTANT: this uses ONLY the manually drawn line (commercial SF coordinates
+        # must never be inferred from lap/lap_elapsed fields).
+        try:
+            want = messagebox.askyesno("保存为赛道？", "是否将当前手动设置的起终点线保存为赛道 JSON？\n（保存到 ~/.openlap/tracks/，仅用于打标签/历史记录）")
+            if not want:
+                return
+            default_name = os.path.splitext(os.path.basename(self.current_file))[0]
+            name = simpledialog.askstring("赛道名", "请输入赛道名：", initialvalue=default_name)
+            if not name:
+                return
+            name = str(name).strip()
+            if not name:
+                return
+
+            # Filename-safe slug
+            slug = re.sub(r'[\\/:*?"<>|]+', '_', name).strip().strip('.')
+            slug = re.sub(r'\s+', ' ', slug).strip().replace(' ', '-')
+            if not slug:
+                slug = 'Track'
+
+            out_dir = Path.home() / '.openlap' / 'tracks'
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / f'{slug}.json'
+
+            p1 = self.line_p1
+            p2 = self.line_p2
+            cfg = {
+                "metadata": {"name": name},
+                "label_info": {
+                    "direction": "CCW",
+                    "line_lonlat": [
+                        [float(p1["lon"]), float(p1["lat"])],
+                        [float(p2["lon"]), float(p2["lat"])],
+                    ],
+                },
+            }
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+            messagebox.showinfo("已保存赛道", f"赛道 JSON 已保存到：\n{out_path}")
+        except Exception as exc:
+            messagebox.showwarning("保存赛道失败", f"保存赛道 JSON 失败：\n{exc}")
 
 if __name__ == "__main__":
     root = tk.Tk()

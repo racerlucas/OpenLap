@@ -2570,11 +2570,15 @@ class WebviewAPI:
         return launch_gui_split(telemetry_path)
 
     def list_track_jsons(self) -> list:
-        """List track JSON files from repository-local tracks/ directory."""
+        """List track JSON files from user-local ~/.openlap/tracks/ directory.
+
+        We intentionally do NOT ship commercial track JSONs inside the app bundle.
+        Users can create minimal track JSONs via the manual line tool (lap_split_tools/gui_split.py),
+        or copy their own JSONs into ~/.openlap/tracks/.
+        """
         import json
-        base = Path(__file__).resolve().parent / 'tracks'
-        if not base.exists():
-            return []
+        base = Path.home() / '.openlap' / 'tracks'
+        base.mkdir(parents=True, exist_ok=True)
         items = []
         for p in sorted(base.glob('*.json')):
             if p.name.endswith('.template.json'):
@@ -2591,7 +2595,6 @@ class WebviewAPI:
                     or p.stem
                 )
             except Exception:
-                # Fallback to filename stem when metadata parsing fails.
                 display_name = p.stem
             items.append({
                 'name': p.stem,
