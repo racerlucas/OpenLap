@@ -28,9 +28,6 @@ def _setup_logging() -> None:
     log_dir = Path.home() / '.openlap' / 'logs'
     log_dir.mkdir(parents=True, exist_ok=True)
     fmt = logging.Formatter('%(asctime)s %(levelname)-8s %(name)s — %(message)s')
-    ch = logging.StreamHandler(sys.stdout)
-    ch.setLevel(logging.INFO)
-    ch.setFormatter(fmt)
     root = logging.getLogger()
 
     # Avoid duplicate handlers if this module is imported multiple times.
@@ -38,8 +35,18 @@ def _setup_logging() -> None:
         return
     setattr(root, '_openlap_logging_configured', True)
 
+    # Release / packaged default: no console logging (file only).
+    # To temporarily enable console logs:
+    #   set OPENLAP_LOG_CONSOLE=1
+    enable_console = os.environ.get('OPENLAP_LOG_CONSOLE', '').strip().lower() in ('1', 'true', 'yes', 'on')
+
     root.setLevel(logging.DEBUG if not is_child_process else logging.INFO)
-    root.addHandler(ch)
+
+    if enable_console:
+        ch = logging.StreamHandler(sys.stdout)
+        ch.setLevel(logging.INFO)
+        ch.setFormatter(fmt)
+        root.addHandler(ch)
 
     if not is_child_process:
         fh = logging.handlers.RotatingFileHandler(
@@ -47,6 +54,10 @@ def _setup_logging() -> None:
         fh.setLevel(logging.DEBUG)
         fh.setFormatter(fmt)
         root.addHandler(fh)
+    else:
+        # Child processes: avoid both console noise and Windows file-lock races.
+        # If you ever need child logs, enable OPENLAP_LOG_CONSOLE=1 and run unbundled.
+        pass
 
     # Matplotlib can be extremely chatty at DEBUG (e.g. font matching).
     logging.getLogger('matplotlib').setLevel(logging.WARNING)

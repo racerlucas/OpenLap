@@ -104,6 +104,26 @@
       .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
+  function _csvKeyVariants(p) {
+    const raw = String(p || '');
+    if (!raw) return [];
+    const out = [raw];
+    if (raw.includes('\\')) out.push(raw.replace(/\\/g, '/'));
+    if (raw.includes('/')) out.push(raw.replace(/\//g, '\\'));
+    const seen = new Set();
+    return out.filter(x => (x && !seen.has(x) && (seen.add(x), true)));
+  }
+
+  function _savedOffsetFromConfig(cfg, csvPath) {
+    const offsets = cfg?.offsets;
+    if (!offsets || typeof offsets !== 'object') return null;
+    for (const k of _csvKeyVariants(csvPath)) {
+      const n = Number(offsets[k]);
+      if (Number.isFinite(n)) return n;
+    }
+    return null;
+  }
+
   // ── State ──────────────────────────────────────────────────────────────────
   let _layout    = null;   // {is_bike, theme, gauges:[...]}
   let _presets   = [];
@@ -1240,15 +1260,10 @@
     _selLapIdx = lapIdx;
     _stopLiveRaf();
 
-    // Offset may have changed on Data tab (saved or preview-temp). Refresh before seeking.
-    try {
-      const ps = State.get('previewSession');
-      const off = ps?.sync_offset ?? _liveSession?.sync_offset;
-      if (off != null && Number.isFinite(Number(off))) {
-        _liveOffset = Number(off);
-        if (_liveSession) _liveSession.sync_offset = Number(off);
-      }
-    } catch (_) {}
+    // Editor ignores Data-tab preview offsets; keep using saved offset only.
+    if (_liveSession?.sync_offset != null && Number.isFinite(Number(_liveSession.sync_offset))) {
+      _liveOffset = Number(_liveSession.sync_offset);
+    }
 
     // Seek video immediately (best-effort) so jumping laps doesn't wait for metadata.
     _seekVideoToLapStart(lapIdx);
@@ -1310,6 +1325,14 @@
   async function loadLiveSession(session) {
     const myGen  = _mountGen;  // bail out if unmounted before we finish
     _liveSession = session;
+    // Editor always uses persisted (saved) offset from config, not Data-tab preview temps.
+    try {
+      const cfg = await API.getConfig().catch(() => ({}));
+      const saved = _savedOffsetFromConfig(cfg, session.csv_path);
+      if (saved != null) {
+        session.sync_offset = saved;
+      }
+    } catch (_) {}
     _liveOffset  = session.sync_offset ?? 0;
     _trackMapGeometry = null;
     _lapHistoryCache = new Map();
@@ -2477,8 +2500,7 @@
       _layout
     );
 
-    // Sync offset may have changed while user was on another tab
-    _liveOffset = prevSession?.sync_offset ?? _liveOffset ?? 0;
+    // Editor uses saved offset only; ignore Data-tab preview temp offsets.
 
     const vp = prevSession?.video_paths?.[0] ?? null;
     const videoSrc = (vp && _livePort)

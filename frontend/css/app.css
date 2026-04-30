@@ -296,9 +296,12 @@ body {
   user-select: none;
 }
 .dl-row:hover   { background: rgba(255,255,255,0.03); }
-.dl-row.sel     { background: rgba(79,142,247,0.12) !important; }
-.dl-row.day-best { background: rgba(34,197,94,0.06); }
-.dl-row.day-best.sel { background: rgba(34,197,94,0.14) !important; }
+.dl-row.sel     {
+  background: rgba(79,142,247,0.14) !important;
+  box-shadow: inset 3px 0 0 var(--acc);
+}
+.dl-row.day-best { background: rgba(34,197,94,0.10); }
+.dl-row.day-best.sel { background: rgba(34,197,94,0.18) !important; }
 
 .dl-sync  { width: 62px; flex-shrink: 0; font-size: 9px; font-weight: 600; letter-spacing: 0.02em; }
 .di-synced  { color: var(--ok); }

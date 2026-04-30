@@ -412,7 +412,14 @@ class WebviewAPI:
                 return {'ok': False, 'error': str(e)}
 
     def debug_sync_seek(self, tag: str = '', details: dict = None) -> dict:
-        """Data-tab sync UI seek hook (silenced)."""
+        """Data-tab sync UI seek hook (writes to log for debugging)."""
+        try:
+            if details is None:
+                details = {}
+            # Keep logs readable; details can be nested dicts.
+            logger.info('sync_seek: %s %s', str(tag or ''), details)
+        except Exception:
+            pass
         return {'ok': True}
 
     def decode_session_step(self, session_id: str, direction: int = 1) -> dict:

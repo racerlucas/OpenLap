@@ -134,19 +134,31 @@
    * 当 sync_offset 为负时，用「第 1 圈」可能对不上视频 0s 起点（telemetry 早于录像）。
    * 选第一个计时圈（非 out/in）使 off + elapsed_start >= 0，否则退回 pool 中最后一圈。
    */
-  function pickAlignRefLapNumForOffset(off, laps, preferredRef) {
+  function pickAlignRefLapNumForOffset(off, laps, preferredRef, opts = null) {
     const o = Number(off);
     const pref = Number(preferredRef);
     if (!Number.isFinite(o) || !laps?.length) return pref;
+    const minVt = opts && Number.isFinite(Number(opts.minVt)) ? Number(opts.minVt) : 0;
+    const maxVt = opts && Number.isFinite(Number(opts.maxVt)) ? Number(opts.maxVt) : null;
     const timed = laps.filter(l => !l.is_outlap && !l.is_inlap);
     const pool = timed.length ? timed : laps;
     const prefLap = laps.find(l => Number(l.lap_num) === pref);
     const prefE = prefLap ? (Number(prefLap.elapsed_start) || 0) : 0;
-    if (o + prefE >= -1e-3) return pref;
+    const prefVt = o + prefE;
+    if (prefVt >= (minVt - 1e-3) && (maxVt == null || prefVt <= (maxVt + 1e-3))) return pref;
     const sorted = [...pool].sort((a, b) => (Number(a.elapsed_start) || 0) - (Number(b.elapsed_start) || 0));
     for (const lap of sorted) {
       const e = Number(lap.elapsed_start) || 0;
-      if (o + e >= -1e-3) return Number(lap.lap_num);
+      const vt = o + e;
+      if (vt >= (minVt - 1e-3) && (maxVt == null || vt <= (maxVt + 1e-3))) return Number(lap.lap_num);
+    }
+    // If nothing fits both bounds, prefer the last lap that is within maxVt (if provided).
+    if (maxVt != null) {
+      for (let i = sorted.length - 1; i >= 0; i--) {
+        const e = Number(sorted[i].elapsed_start) || 0;
+        const vt = o + e;
+        if (vt <= (maxVt + 1e-3)) return Number(sorted[i].lap_num);
+      }
     }
     const last = sorted[sorted.length - 1];
     return last ? Number(last.lap_num) : pref;
@@ -490,10 +502,24 @@ ${renderLapTagCard(s)}
     const as = _autoSyncByCsv?.[s.csv_path];
     const isSyncing = !!as?.running;
     const laps = _lapDetails[s.csv_path] || [];
-    // Default to the first lap in list (including outlap), per UX requirement.
-    const defaultRefLap = (laps[0]?.lap_num) || 1;
-    const savedRefLap = Number(_config?.session_info?.[s.csv_path]?.sync_ref_lap_num || defaultRefLap);
-    const preciseMode = !!_config?.session_info?.[s.csv_path]?.sync_precise_mode;
+    const cfgInfo = _config?.session_info?.[s.csv_path] || {};
+    // Default reference lap (auto-picked by offset so vt=offset+elapsed_start lands inside [0, video]).
+    // This avoids the "always clamps to 0s" feel when offset is negative and outlap is used as ref.
+    const firstTimed = laps.find(l => !l.is_outlap && !l.is_inlap) || laps.find(l => !l.is_outlap) || laps[0] || null;
+    const defaultRefLap = Number(firstTimed?.lap_num ?? 1) || 1;
+    // Only treat sync_ref_lap_num as a preference if the user explicitly changed it.
+    // (Earlier builds could auto-write sync_ref_lap_num and "poison" defaults to lap 3, etc.)
+    const userPrefRefLap = cfgInfo?.sync_ref_lap_user === true;
+    const preferredRefLap = userPrefRefLap
+      ? Number(cfgInfo?.sync_ref_lap_num || defaultRefLap)
+      : defaultRefLap;
+    const offForPick = (effOffForReadoutInit != null && Number.isFinite(Number(effOffForReadoutInit)))
+      ? Number(effOffForReadoutInit)
+      : (sessionEffectiveOffset(s) ?? 0);
+    // Default ref lap should be the *first* lap whose start time appears on the video timeline.
+    // (vt = off + elapsed_start >= 0). Allow vt=0 — it's still "in timeline".
+    const savedRefLap = pickAlignRefLapNumForOffset(offForPick, laps, preferredRefLap, { minVt: 0 });
+    const preciseMode = !!cfgInfo?.sync_precise_mode;
     const lapOptions = laps.map((lap, idx) => {
       const lapNum = Number(lap.lap_num ?? (idx + 1));
       const sel = lapNum === savedRefLap ? 'selected' : '';
@@ -936,8 +962,19 @@ ${renderLapTagCard(s)}
     const videoPath = s.video_paths?.[0];
     if (!videoPath) return;
 
+    // Generation guard: session switching can leave old async init tasks running.
+    // Only the latest wireVideoSync call for this pane is allowed to mutate global
+    // decode session state or update the scrubber/video elements.
+    const myGen = (pane._openlapSyncGen || 0) + 1;
+    pane._openlapSyncGen = myGen;
+    const alive = () => (
+      _container && pane && pane.isConnected && pane._openlapSyncGen === myGen
+      && liveVideoEl && liveVideoEl.isConnected
+    );
+
     function applyVideoAspectRatioFromMeta() {
       try {
+        if (!alive()) return;
         if (!frameWrapEl || !liveVideoEl) return;
         const vw = Number(liveVideoEl.videoWidth || 0);
         const vh = Number(liveVideoEl.videoHeight || 0);
@@ -956,6 +993,7 @@ ${renderLapTagCard(s)}
       autoSyncState: _autoSyncByCsv?.[s.csv_path] || null,
       video: _dbgVideoState(liveVideoEl),
     });
+    logSyncSeek('wire_init', { has_video_el: !!liveVideoEl, has_scrub: !!scrub });
 
     let fps = 30;
     let frameCount = 0;
@@ -1082,7 +1120,18 @@ ${renderLapTagCard(s)}
       return Math.max(0, Math.round(Math.max(0, Number(t) || 0) * f));
     }
     function maxFrame() {
-      return Math.max(0, (frameCount || 0) - 1);
+      const fc = Number(frameCount || 0);
+      if (Number.isFinite(fc) && fc > 0) return Math.max(0, fc - 1);
+      // Fallback: if OpenCV frame_count is not available yet, approximate from
+      // <video> duration so the scrubber doesn't get stuck at 0 for later sessions.
+      try {
+        const d = Number(liveVideoEl?.duration);
+        const f = Math.max(1e-6, Number(fps) || 30);
+        if (Number.isFinite(d) && d > 0.25) {
+          return Math.max(0, Math.round(d * f) - 1);
+        }
+      } catch (_) {}
+      return 0;
     }
     /** Prefer OpenCV frame_count; before it arrives use <video> duration so seek clamps are not stuck at 0s. */
     function videoDurationSec() {
@@ -1200,6 +1249,7 @@ ${renderLapTagCard(s)}
     function applyMeta(forceWriteTemp = false) {
       if (scrub) {
         scrub.min = '0';
+        // maxFrame() falls back to duration*fps when OpenCV frame_count is not ready yet.
         scrub.max = String(maxFrame());
         scrub.step = '1';
         // Do not fight the native range thumb while the user is dragging (WebView2 + timeupdate).
@@ -1214,9 +1264,10 @@ ${renderLapTagCard(s)}
         const off = t - refElapsed;
         const sign = off >= 0 ? '+' : '';
         ro.textContent = `${sign}${off.toFixed(3)}s`;
-        // auto 偏移已信任采用：勿用推算条被动刷新 _temp 盖住 sync_offset；用户拖条/±帧会 setTempOffset 进入预览。
-        const lockSavedAutoOffset = !forceWriteTemp && syncIsAutoFamily(s.sync_source) && !sessionOffsetIsPreview(s);
-        if (!lockSavedAutoOffset) setTempOffset(off);
+        // Only write preview offset when the user is actively scrubbing (forceWriteTemp=true).
+        // Programmatic seeks (init / ref-lap jump) should never mutate _temp_sync_offset,
+        // otherwise the session can get "self-locked" into vt=0 via off=t-refElapsed at frame 0.
+        if (forceWriteTemp) setTempOffset(off);
       }
       syncHiddenLiveVideoFromCurFrame();
     }
@@ -1425,7 +1476,9 @@ ${renderLapTagCard(s)}
     }
     /** OpenCV JPEG path only (used when <video> GPU preview is unusable). */
     async function decodeToFrameCpu(targetFrame, quiet = false, forceWriteTemp = false) {
+      if (!alive()) return;
       await awaitDecodeIdle();
+      if (!alive()) return;
       switchToFrameMode();
       // Invalidate any in-flight seek for this panel so an older RPC cannot paint after a newer one
       // (e.g. 换参考圈时仍共用 decodeSeq=0 的旧解码会盖住新帧 — Python 已 seek 但 <img> 仍是上一段)。
@@ -1434,6 +1487,7 @@ ${renderLapTagCard(s)}
       busy = true;
       if (!quiet) setLoading(true, '正在解码帧…');
       try {
+        if (!alive()) return;
         if (!decoderSessionId) {
           if (!quiet) {
             setStatus('无法解码：未建立 OpenCV 会话（视频路径可能无法打开或编码不支持）');
@@ -1441,6 +1495,7 @@ ${renderLapTagCard(s)}
           return;
         }
         const rsp = await API.decodeSessionSeek(decoderSessionId, targetFrame, null);
+        if (!alive()) return;
         if (mySeq !== decodeSeq) return;
         if (!rsp?.ok) {
           frameEl.classList.remove('ready');
@@ -1456,18 +1511,74 @@ ${renderLapTagCard(s)}
         curFrame = Math.max(0, Number(rsp.frame_idx || 0));
         frameEl.src = `data:image/jpeg;base64,${rsp.image_b64 || ''}`;
         frameEl.classList.add('ready');
+        // Ensure the decoded JPEG is actually painted before hiding the loading overlay.
+        // WebView2 can keep a black frame briefly even after src assignment.
+        try {
+          const img = frameEl;
+          const timeoutMs = 900;
+          const t0 = Date.now();
+          const waitLoad = () => new Promise((resolve) => {
+            let done = false;
+            const fin = () => { if (done) return; done = true; resolve(); };
+            try {
+              if (img.complete && img.naturalWidth > 0) return fin();
+            } catch (_) {}
+            try { img.addEventListener('load', fin, { once: true }); } catch (_) {}
+            try { img.addEventListener('error', fin, { once: true }); } catch (_) {}
+            setTimeout(fin, Math.max(0, timeoutMs - (Date.now() - t0)));
+          });
+          // Prefer decode() when available; fall back to load event.
+          if (typeof img.decode === 'function') {
+            try {
+              await Promise.race([
+                img.decode(),
+                new Promise((r) => setTimeout(r, timeoutMs)),
+              ]);
+            } catch (_) {}
+          }
+          await waitLoad();
+        } catch (_) {}
+        if (!alive()) return;
+        if (mySeq !== decodeSeq) return;
         applyMeta(forceWriteTemp);
+        logSyncSeek('opencv_paint', { curFrame, frameCount, fps, scrubMax: scrub ? scrub.max : null, scrubVal: scrub ? scrub.value : null });
       } finally {
         busy = false;
         if (!quiet) setLoading(false);
       }
+
+      // Log only when paused and values change (avoid flooding).
+      try {
+        if (!playing) {
+          const mx = scrub ? String(scrub.max) : '';
+          const vv = scrub ? String(scrub.value) : '';
+          if (pane._openlapLastMetaLog == null) pane._openlapLastMetaLog = {};
+          const prev = pane._openlapLastMetaLog;
+          if (prev.mx !== mx || prev.vv !== vv || prev.cf !== curFrame) {
+            pane._openlapLastMetaLog = { mx, vv, cf: curFrame };
+            logSyncSeek('applyMeta', {
+              curFrame,
+              frameCount,
+              fps,
+              maxFrame: maxFrame(),
+              scrubMax: mx,
+              scrubVal: vv,
+              gpuReady,
+              liveMode,
+              videoTime: Number(liveVideoEl?.currentTime || 0),
+            });
+          }
+        }
+      } catch (_) {}
     }
 
     async function decodeToFrame(targetFrame, quiet = false, opts = {}) {
+      if (!alive()) return;
       const forceWT = !!opts.forceWriteTemp;
       const forceOpenCv = !!opts.forceOpenCv;
       if (!forceOpenCv && gpuReady && liveVideoEl) {
         try {
+          if (!alive()) return;
           const mf = maxFrame();
           const raw = Number(targetFrame || 0);
           const clamped = mf > 0 ? Math.max(0, Math.min(mf, raw)) : Math.max(0, raw);
@@ -1533,12 +1644,19 @@ ${renderLapTagCard(s)}
       return (laps[0]?.elapsed_start) || 0;
     }
 
-    /** 若 off+参考圈起点 < 0（视频只能 0s 起），自动换到第一个能对上的计时参考圈并写入配置 */
-    async function ensureRefLapFitsVideoZero(offForPick) {
+    /**
+     * 若 off+参考圈起点 落不到视频时间线内，自动切换到一个更合适的参考圈（仅本次 UI 默认，不自动写配置）。
+     * 口径：默认参考圈选「第一个起点落在视频时间线内的圈」(vt >= 0)；
+     * 若已知视频时长，尽量保证 vt <= duration。
+     */
+    async function ensureRefLapFitsVideoTimeline(offForPick) {
       const laps = _lapDetails[s.csv_path] || [];
       if (!laps.length) return;
       const o = Number(offForPick);
       if (!Number.isFinite(o)) return;
+      const d = videoDurationSec();
+      const minVt = 0;
+      const maxVt = (d > 0.25) ? Math.max(0, d - 0.25) : null;
       const cfg = _config?.session_info?.[s.csv_path] || {};
       const defaultRef = (laps.find(l => !l.is_outlap && !l.is_inlap)?.lap_num)
         ?? laps.find(l => !l.is_outlap)?.lap_num
@@ -1547,13 +1665,11 @@ ${renderLapTagCard(s)}
       const preferred = Number(refLapSel?.value || cfg.sync_ref_lap_num || defaultRef) || Number(defaultRef);
       const prefLap = laps.find(l => Number(l.lap_num) === preferred);
       const prefE = prefLap ? (Number(prefLap.elapsed_start) || 0) : 0;
-      if (o + prefE >= -1e-3) return;
-      const newNum = pickAlignRefLapNumForOffset(o, laps, preferred);
+      const prefVt = o + prefE;
+      if (prefVt >= (minVt - 1e-3) && (maxVt == null || prefVt <= (maxVt + 1e-3))) return;
+      const newNum = pickAlignRefLapNumForOffset(o, laps, preferred, { minVt, maxVt });
       if (newNum === preferred) return;
       try {
-        await API.editSessionInfo(s.csv_path, { ...cfg, sync_ref_lap_num: newNum });
-        if (!_config.session_info) _config.session_info = {};
-        _config.session_info[s.csv_path] = { ...cfg, sync_ref_lap_num: newNum };
         if (refLapSel) refLapSel.value = String(newNum);
       } catch (_) { /* keep UI ref on failure */ }
     }
@@ -1563,8 +1679,20 @@ ${renderLapTagCard(s)}
       const laps = _lapDetails[s.csv_path] || [];
       return (laps[0]?.elapsed_start) || 0;
     }
+    let _lastSyncSeekLogMs = 0;
     function logSyncSeek(tag, extra = {}) {
-      return;
+      try {
+        const now = Date.now();
+        // Throttle to avoid flooding logs on scrub/timeupdate.
+        if (now - _lastSyncSeekLogMs < 120) return;
+        _lastSyncSeekLogMs = now;
+        API.debugSyncSeek(tag, {
+          csv_path: s.csv_path,
+          video_path: videoPath,
+          gen: pane?._openlapSyncGen || 0,
+          ...extra,
+        }).catch(() => {});
+      } catch (_) { /* ignore */ }
     }
     async function seekToRefLap() {
       if (alignJpegTimer) {
@@ -1573,12 +1701,14 @@ ${renderLapTagCard(s)}
       }
       stopBeforeSeek();
       const off = baselineOrActiveOffsetForSeek();
-      await ensureRefLapFitsVideoZero(off);
+      await ensureRefLapFitsVideoTimeline(off);
+      const refLapNumNow = Number(refLapSel?.value || _config?.session_info?.[s.csv_path]?.sync_ref_lap_num || 0) || 0;
       const refE = getRefLapElapsed();
       const vt = clampVideoTimeSec(off + refE);
       const target = timeToFrame(vt);
       logSyncSeek('seekToRefLap', {
         offsetUsed: off,
+        refLapNum: refLapNumNow,
         refLapElapsed: refE,
         vtTargetSec: vt,
         targetFrame: target,
@@ -1604,9 +1734,11 @@ ${renderLapTagCard(s)}
     }
 
     (async () => {
+      if (!alive()) return;
       // Ensure only one persistent decode session stays alive for Data page.
       let opened = null;
       if (_syncDecoderSessionId && (_syncDecoderVideoPath !== videoPath)) {
+        if (!alive()) return;
         await API.closeDecodeSession(_syncDecoderSessionId).catch(() => {});
         _syncDecoderSessionId = '';
         _syncDecoderVideoPath = '';
@@ -1614,7 +1746,9 @@ ${renderLapTagCard(s)}
       // Always open decode session to populate fps/frame_count for the scrubber.
       // We prefer <video> for rendering (so this doesn't decode frames unless we fall back).
       if (!_syncDecoderSessionId) {
+        if (!alive()) return;
         opened = await API.openDecodeSession(videoPath, 10).catch(() => null);
+        if (!alive()) return;
         if (opened?.session_id) {
           _syncDecoderSessionId = opened.session_id;
           _syncDecoderVideoPath = videoPath;
@@ -1627,13 +1761,16 @@ ${renderLapTagCard(s)}
         setStatus(`OpenCV 无法打开视频：${opened.error}（将尝试浏览器预览；仍失败请开「精确模式」）`);
       }
       try {
+        if (!alive()) return;
         const info = await API.getVideoFps(videoPath);
+        if (!alive()) return;
         if (info?.ok && Number(info.fps) > 0) fps = Number(info.fps);
         if (info?.ok && Number(info.frame_count) > 0) frameCount = Number(info.frame_count);
       } catch (_) {}
       if (Number.isFinite(opened?.fps) && Number(opened.fps) > 0) fps = Number(opened.fps);
       if (liveVideoEl && videoPath) {
         try {
+          if (!alive()) return;
           liveVideoEl.src = videoUrl(videoPath);
           liveVideoEl.load();
           await new Promise(resolve => {
@@ -1655,10 +1792,11 @@ ${renderLapTagCard(s)}
             liveVideoEl.addEventListener('error', onErr, { once: true });
           });
           if (gpuReady) {
+            if (!alive()) return;
             switchToLiveMode();
             // currentTime assignment is async; do not read liveVideoEl.currentTime here or applyMeta()
             // will infer the wrong offset and clobber sync_offset via setTempOffset (baseline → 推算错位).
-            await ensureRefLapFitsVideoZero(baselineOrActiveOffsetForSeek());
+            await ensureRefLapFitsVideoTimeline(baselineOrActiveOffsetForSeek());
             const vt0 = clampVideoTimeSec(baselineOrActiveOffsetForSeek() + getRefLapElapsed());
             // Seek to the aligned frame and WAIT for it to land before declaring ready,
             // otherwise WebView2 may stay black until the next user interaction.
@@ -1674,17 +1812,21 @@ ${renderLapTagCard(s)}
                 setTimeout(finish, 900);
               });
             } catch (_) {}
+            if (!alive()) return;
 
             // After seek settles, derive curFrame from the actual video time.
             const tSnap0 = Number(liveVideoEl.currentTime || vt0);
             const tf0 = timeToFrame(tSnap0);
             const mf0 = maxFrame();
             curFrame = mf0 > 0 ? Math.max(0, Math.min(mf0, tf0)) : tf0;
+            logSyncSeek('init_seek_snap', { vt0, tSnap0, tf0, mf0, curFrame, scrubMax: scrub ? scrub.max : null });
             applyMeta();
+            logSyncSeek('init_after_applyMeta', { scrubMax: scrub ? scrub.max : null, scrubVal: scrub ? scrub.value : null, curFrame });
             applyVideoAspectRatioFromMeta();
             try { liveVideoEl.classList.add('ready'); } catch (_) {}
             // WebView2 may report metadata before first paint; don't eagerly fall back to JPEG.
             await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+            if (!alive()) return;
             const vw = liveVideoEl.videoWidth || 0;
             const vh = liveVideoEl.videoHeight || 0;
             if (vw >= 2 && vh >= 2) {
@@ -1718,6 +1860,7 @@ ${renderLapTagCard(s)}
       }
       // If GPU init failed later, we already have (or re-used) decode session for fallback.
       if (!gpuReady) {
+        if (!alive()) return;
         await seekToRefLap();
       }
       if (!decoderSessionId && !gpuReady) {
@@ -1786,9 +1929,9 @@ ${renderLapTagCard(s)}
     refLapSel?.addEventListener('change', async () => {
       const n = Number(refLapSel.value || 0);
       const existing = _config?.session_info?.[s.csv_path] || {};
-      await API.editSessionInfo(s.csv_path, { ...existing, sync_ref_lap_num: n });
+      await API.editSessionInfo(s.csv_path, { ...existing, sync_ref_lap_num: n, sync_ref_lap_user: true });
       if (!_config.session_info) _config.session_info = {};
-      _config.session_info[s.csv_path] = { ...existing, sync_ref_lap_num: n };
+      _config.session_info[s.csv_path] = { ...existing, sync_ref_lap_num: n, sync_ref_lap_user: true };
       const ui = beginSyncSeekUi();
       try {
         await seekToRefLap();
@@ -1801,7 +1944,7 @@ ${renderLapTagCard(s)}
     async function applyOffsetFromValue(v) {
       if (!Number.isFinite(v)) return;
       stopPlayback();
-      await ensureRefLapFitsVideoZero(v);
+      await ensureRefLapFitsVideoTimeline(v);
       setTempOffset(v);
       const refE = getRefLapElapsed();
       const vt = clampVideoTimeSec(v + refE);
