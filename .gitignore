@@ -8,6 +8,7 @@ racebox_auth.json
 # FFmpeg binaries (copied locally for bundling — not committed)
 ffmpeg.exe
 ffprobe.exe
+third_party/ffmpeg/
 
 # Build / distribution
 build/

@@ -56,7 +56,7 @@
     <section class="settings-section">
       <div class="section-title">视频与输出</div>
       ${_folderRow('视频源目录', 'video_path',  cfg.video_path,  '行车记录仪 / 车载视频')}
-      ${_folderRow('导出目录','export_path', cfg.export_path, '导出视频保存位置')}
+      <p class="section-hint" style="margin-top:4px">导出目录、编码与并发请在<strong>导出</strong>页配置。</p>
     </section>
 
     <!-- RaceBox cloud -->
@@ -105,39 +105,6 @@
         <button class="btn btn-secondary" id="aim-dll-btn">Download DLL</button>
         <span id="aim-dll-msg" class="status-msg"></span>
       </div>
-    </section>
-
-    <!-- Encoder -->
-    <section class="settings-section">
-      <div class="section-title">编码器</div>
-      <p class="section-hint">OpenLap 使用 FFmpeg 处理视频，这些设置会作用于每次导出。</p>
-      <div class="form-row">
-        <label>编码格式</label>
-        <select data-config-key="encoder" class="input-field">
-          <option value="libx264" ${cfg.encoder === 'libx264' || !cfg.encoder ? 'selected' : ''}>H.264 (libx264) — 通用</option>
-          <option value="libx265" ${cfg.encoder === 'libx265' ? 'selected' : ''}>H.265 (libx265) — 文件更小</option>
-          <option value="h264_nvenc" ${cfg.encoder === 'h264_nvenc' ? 'selected' : ''}>H.264 NVENC — NVIDIA 显卡</option>
-          <option value="h264_videotoolbox" ${cfg.encoder === 'h264_videotoolbox' ? 'selected' : ''}>H.264 VideoToolbox — Apple</option>
-        </select>
-      </div>
-      <div class="form-row">
-        <label>质量（CRF）</label>
-        <div class="range-row">
-          <input type="range" id="enc-crf" data-config-key="crf"
-                 min="12" max="32" step="1" value="${cfg.crf ?? 18}">
-          <span class="range-val" id="enc-crf-val">${cfg.crf ?? 18}</span>
-        </div>
-      </div>
-      <div class="form-row">
-        <label>并发进程</label>
-        <input type="number" data-config-key="workers" class="input-field input-narrow"
-               value="${cfg.workers ?? 4}" min="1" max="16" step="1">
-      </div>
-      <div class="form-row" style="margin-top:8px">
-        <button class="btn btn-secondary" id="enc-check-btn">检测编码器</button>
-        <span id="enc-msg" class="status-msg"></span>
-      </div>
-      <div id="enc-results" class="enc-results hidden"></div>
     </section>
 
     <!-- Auto Sync -->
@@ -355,47 +322,6 @@
       await API.cancelRaceboxDownload();
       _rbSetDownloading(false);
       _rbAppendLog('正在取消…');
-    });
-
-    // CRF slider label sync
-    $('enc-crf').addEventListener('input', e => {
-      $('enc-crf-val').textContent = e.target.value;
-    });
-
-    // Encoder detection
-    $('enc-check-btn').addEventListener('click', async () => {
-      const msgEl     = $('enc-msg');
-      const resultsEl = $('enc-results');
-      _setMsg(msgEl, '检测中…', 'dim');
-      $('enc-check-btn').disabled = true;
-      resultsEl.classList.add('hidden');
-
-      try {
-        const result = await API.checkEncoders();
-        if (!result) {
-          _setMsg(msgEl, '未找到 FFmpeg。', 'err');
-          return;
-        }
-        if (result.error) {
-          _setMsg(msgEl, result.error, 'err');
-          return;
-        }
-
-        _setMsg(msgEl, `FFmpeg ${result.version || '已检测到'}。`, 'ok');
-        const encoders = result.encoders || [];
-        resultsEl.innerHTML = encoders.map(e =>
-          `<div class="enc-row">
-             <span class="enc-name">${_esc(e.name)}</span>
-             <span class="enc-label">${_esc(e.label)}</span>
-             <span class="badge ${e.available ? 'badge-ok' : 'badge-muted'}">${e.available ? '可用' : '不可用'}</span>
-           </div>`
-        ).join('');
-        resultsEl.classList.remove('hidden');
-      } catch (err) {
-        _setMsg(msgEl, String(err), 'err');
-      } finally {
-        $('enc-check-btn').disabled = false;
-      }
     });
 
     // AIM DLL status + download

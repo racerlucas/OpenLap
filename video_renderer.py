@@ -16,11 +16,39 @@ import logging
 import math
 import os
 import tempfile
+from datetime import datetime, timezone
 from collections import deque
 from multiprocessing import Pool
 from typing import Callable, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+def _unique_export_path(path: str) -> str:
+    if not os.path.exists(path):
+        return path
+    root, ext = os.path.splitext(path)
+    for n in range(2, 10000):
+        cand = f"{root}_{n}{ext}"
+        if not os.path.exists(cand):
+            return cand
+    return path
+
+
+def _fallback_session_utc(session: Session) -> datetime:
+    pts = session.all_points
+    if pts:
+        t = pts[0].time
+        if t.tzinfo is None:
+            return t.replace(tzinfo=timezone.utc)
+        return t.astimezone(timezone.utc)
+    du = getattr(session, 'date_utc', '') or ''
+    try:
+        if du.strip():
+            return datetime.fromisoformat(du.strip().replace('Z', '+00:00')).astimezone(timezone.utc)
+    except Exception:
+        pass
+    return datetime.now(timezone.utc)
 
 from utils import _run, _popen
 import cv2
@@ -40,7 +68,8 @@ from telemetry_algorithms import (
     lap_time_display_value,
 )
 
-from data_model import Session, Lap
+from data_model import Session, Lap, absolute_time_at_elapsed
+from export_codec import resolve_export_container_extension
 from overlay_worker import render_frame_worker, scale_factor, default_layout
 from exceptions import VideoConcatError, VideoMuxError, LapOutOfRangeError
 
@@ -166,71 +195,158 @@ class MultiCap:
         self._caps.clear()
 
 
-def mux_audio(raw_video: str, audio_source: str,
-               output: str, encoder: str, crf: int = 18,
-               audio_start: float = 0.0,
-               total_s: float = 0.0,
-               prog_start: float = 87.0,
-               prog_end: float = 100.0,
-               progress_cb=None) -> None:
-    """Re-encode raw opencv video with hardware encoder + trim audio.
+def _build_export_vf_chain(encode_options: Optional[dict]) -> str:
+    """scale (optional) + fps (optional) + even dimensions + yuv420p for encoders."""
+    eo = encode_options or {}
+    parts: List[str] = []
+    tr = str(eo.get('export_target_res', 'auto') or 'auto').strip().lower()
+    tf = str(eo.get('export_target_fps', 'auto') or 'auto').strip().lower()
+    if tr != 'auto' and 'x' in tr:
+        try:
+            a, b = tr.split('x', 1)
+            tw, th = int(float(a)), int(float(b))
+            tw -= tw % 2
+            th -= th % 2
+            if tw > 0 and th > 0:
+                parts.append(f'scale={tw}:{th}:flags=lanczos+accurate_rnd')
+        except Exception:
+            pass
+    if tf != 'auto':
+        try:
+            fv = float(tf)
+            if fv > 0:
+                parts.append(f'fps={fv}')
+        except Exception:
+            pass
+    parts.append('scale=trunc(iw/2)*2:trunc(ih/2)*2')
+    parts.append('format=yuv420p')
+    return ','.join(parts)
 
-    When *progress_cb* and *total_s* are provided the function parses ffmpeg's
-    machine-readable progress output and calls progress_cb(pct, msg) as the
-    mux advances, interpolating between prog_start and prog_end.
+
+def _build_video_encode_flags(encoder: str, crf: int, encode_options: Optional[dict]) -> List[str]:
+    """Encoder-specific rate control and quality flags (excluding ``-c:v``).
+
+    CQ / CRF / NVENC CQ only apply when ``export_rate_mode`` is ``cq``.
+    For CBR/VBR with target bitrate unset (0 / auto), we derive a nominal kbps
+    from resolution × fps using the same heuristic as size estimation (still
+    keyed by *crf* as a quality seed), then apply true CBR/VBR flags — the
+    slider is hidden in the UI for CBR/VBR because it is not an FFmpeg CRF in
+    those modes.
     """
+    eo = encode_options or {}
+    rm = str(eo.get('export_rate_mode', 'cq') or 'cq').lower()
+    vb = int(eo.get('export_video_bitrate_kbps', 0) or 0)
+    vmax = int(eo.get('export_video_max_bitrate_kbps', 0) or 0)
+    maxq = bool(eo.get('export_max_quality', False))
+    enc = (encoder or '').lower()
+    c = max(0, min(51, int(crf)))
+
+    if rm in ('cbr', 'vbr') and vb <= 0:
+        vw_m = int(eo.get('_export_mux_vw') or 0)
+        vh_m = int(eo.get('_export_mux_vh') or 0)
+        fp_m = float(eo.get('_export_mux_fps') or 0.0)
+        if vw_m > 0 and vh_m > 0 and fp_m > 0:
+            from export_codec import estimate_effective_avg_video_kbps
+            vb = int(estimate_effective_avg_video_kbps(
+                enc, 'cq', c, 0, vmax, vw_m, vh_m, fp_m,
+            ))
+        else:
+            vb = 8000
+        vb = max(500, min(80_000, vb))
+
+    use_cq = (rm == 'cq')
+
+    if enc == 'libx264':
+        out = ['-preset', 'slower' if maxq else 'medium']
+        if use_cq:
+            out += ['-crf', str(c)]
+        else:
+            mx = vmax if vmax > 0 else max(vb, int(vb * 1.85 + 0.5))
+            if rm == 'cbr':
+                out += ['-b:v', f'{vb}k', '-minrate', f'{vb}k', '-maxrate', f'{vb}k',
+                        '-bufsize', f'{vb * 2}k']
+            else:
+                out += ['-b:v', f'{vb}k', '-maxrate', f'{mx}k', '-bufsize', f'{max(mx, vb) * 2}k']
+        out += ['-profile:v', 'main', '-g', '60']
+        return out
+
+    if enc == 'libx265':
+        out = ['-preset', 'slow' if maxq else 'medium']
+        if use_cq:
+            out += ['-crf', str(c)]
+        else:
+            mx = vmax if vmax > 0 else max(vb, int(vb * 1.85 + 0.5))
+            if rm == 'cbr':
+                out += ['-b:v', f'{vb}k', '-minrate', f'{vb}k', '-maxrate', f'{vb}k',
+                        '-bufsize', f'{vb * 2}k']
+            else:
+                out += ['-b:v', f'{vb}k', '-maxrate', f'{mx}k', '-bufsize', f'{max(mx, vb) * 2}k']
+        out += ['-profile:v', 'main', '-g', '60']
+        return out
+
+    if 'nvenc' in enc:
+        out = ['-preset', 'p7' if maxq else 'p4']
+        if enc == 'h264_nvenc':
+            out += ['-tune', 'uhq' if maxq else 'hq']
+        if use_cq:
+            out += ['-rc', 'vbr', '-cq', str(c), '-b:v', '0']
+        else:
+            if rm == 'cbr':
+                out += ['-rc', 'cbr', '-b:v', f'{vb}k']
+                mxk = f'{vmax}k' if vmax > 0 else f'{vb}k'
+                bsz = (max(vb, vmax) * 2) if vmax > 0 else vb * 2
+                out += ['-maxrate', mxk, '-bufsize', f'{bsz}k']
+            else:
+                mx = vmax if vmax > 0 else max(vb, int(vb * 1.85 + 0.5))
+                out += ['-rc', 'vbr', '-b:v', f'{vb}k', '-maxrate', f'{mx}k',
+                        '-bufsize', f'{max(mx, vb) * 2}k']
+        prof = 'high' if '264' in enc else 'main'
+        out += ['-profile:v', prof, '-g', '60']
+        return out
+
+    out = ['-profile:v', 'main', '-g', '60']
+    if use_cq:
+        out += ['-qp', str(c)]
+    elif vb > 0:
+        out += ['-b:v', f'{vb}k']
+        if vmax > 0:
+            out += ['-maxrate', f'{vmax}k', '-bufsize', f'{max(vmax, vb) * 2}k']
+    else:
+        out += ['-qp', str(c)]
+    return out
+
+
+def _ffmpeg_mux_exec(
+    cmd: List[str],
+    *,
+    total_s: float,
+    prog_start: float,
+    prog_end: float,
+    progress_cb,
+) -> None:
     import threading, subprocess as _sp
 
-    # Quality args — nvenc uses -cq (constant quality, like CRF) not -qp (fixed QP)
-    if encoder == 'libx264':
-        q_arg = ['-crf', str(crf)]
-    elif encoder == 'h264_nvenc':
-        q_arg = ['-rc', 'vbr', '-cq', str(crf), '-b:v', '0']
-    else:
-        q_arg = ['-qp', str(crf)]
-
-    # Force yuv420p: MJPG from OpenCV is yuvj420p (full-range) which hardware
-    # encoders (nvenc/amf/qsv) reject.  Also ensure even dimensions.
-    vf = 'scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p'
-
-    # -profile:v main + -g 60: broad player compatibility + regular keyframes
-    # -movflags +faststart: moov atom at file start, required for proper seeking
-    base_cmd = ['ffmpeg', '-y', '-hide_banner',
-                '-i', raw_video,
-                '-ss', f'{audio_start:.6f}', '-i', audio_source,
-                '-map', '0:v', '-map', '1:a?',
-                '-vf', vf,
-                '-c:v', encoder] + q_arg + [
-                '-profile:v', 'main', '-g', '60',
-                '-c:a', 'aac', '-shortest',
-                '-movflags', '+faststart']
-
     if progress_cb and total_s > 0:
-        # Send machine-readable progress to stdout; suppress normal stats on stderr.
-        cmd = base_cmd + ['-progress', 'pipe:1', '-nostats', output]
-        proc = _popen(cmd,
-                      stdout=_sp.PIPE, stderr=_sp.PIPE)
-
-        # Drain stderr in a background thread so it never blocks the process.
+        proc = _popen(cmd, stdout=_sp.PIPE, stderr=_sp.PIPE)
         stderr_buf: list[bytes] = []
+
         def _drain():
             stderr_buf.extend(proc.stderr)
+
         t = threading.Thread(target=_drain, daemon=True)
         t.start()
-
         pct_range = prog_end - prog_start
         for raw_line in proc.stdout:
             line = raw_line.decode(errors='replace').strip()
             if line.startswith('out_time_ms='):
                 try:
-                    us = int(line.split('=', 1)[1])   # value is microseconds despite the name
+                    us = int(line.split('=', 1)[1])
                     elapsed = us / 1_000_000.0
                     frac = min(1.0, elapsed / total_s)
                     pct = prog_start + frac * pct_range
                     progress_cb(pct, f"Muxing audio…  {elapsed:.1f} / {total_s:.1f}s")
                 except (ValueError, ZeroDivisionError):
                     pass
-
         proc.wait()
         t.join()
         if proc.returncode != 0:
@@ -238,12 +354,70 @@ def mux_audio(raw_video: str, audio_source: str,
             logger.error('FFmpeg mux failed:\n%s', err)
             raise VideoMuxError(err[-600:])
     else:
-        cmd = base_cmd + [output]
         r = _run(cmd)
         if r.returncode != 0:
             err = r.stderr.decode(errors='replace')
             logger.error('FFmpeg mux failed:\n%s', err)
             raise VideoMuxError(err[-600:])
+
+
+def mux_audio(raw_video: str, audio_source: str,
+               output: str, encoder: str, crf: int = 18,
+               audio_start: float = 0.0,
+               total_s: float = 0.0,
+               prog_start: float = 87.0,
+               prog_end: float = 100.0,
+               progress_cb=None,
+               creation_time_utc: Optional[datetime] = None,
+               encode_options: Optional[dict] = None) -> None:
+    """Re-encode raw OpenCV video, mux source audio (copy preferred), trim to shortest.
+
+    When *progress_cb* and *total_s* are provided the function parses ffmpeg's
+    machine-readable progress output and calls progress_cb(pct, msg) as the
+    mux advances, interpolating between prog_start and prog_end.
+    """
+    eo = encode_options if isinstance(encode_options, dict) else {}
+    vf = _build_export_vf_chain(eo)
+    vflags = _build_video_encode_flags(encoder, crf, eo)
+    _ab_cfg = int(eo.get('export_audio_bitrate_kbps', 0) or 0)
+    # 0 = 跟随原片（优先 -c:a copy）；仅在必须重编码 AAC 时用中等码率。
+    ab_kbps = max(32, min(320, _ab_cfg)) if _ab_cfg > 0 else 192
+
+    meta_args: list = []
+    if creation_time_utc is not None:
+        ct = creation_time_utc.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000000Z')
+        meta_args = ['-metadata', f'creation_time={ct}']
+
+    out_ext = os.path.splitext(output)[1].lower()
+    tail: list[str] = []
+    if out_ext in ('.mp4', '.m4v'):
+        tail = ['-movflags', '+faststart']
+
+    def _build_cmd(audio_copy: bool) -> List[str]:
+        ac = (['-c:a', 'copy'] if audio_copy else
+              ['-c:a', 'aac', '-b:a', f'{ab_kbps}k'])
+        return (['ffmpeg', '-y', '-hide_banner',
+                 '-i', raw_video,
+                 '-ss', f'{audio_start:.6f}', '-i', audio_source,
+                 '-map', '0:v', '-map', '1:a?',
+                 '-vf', vf,
+                 '-c:v', encoder] + vflags + ac + ['-shortest']
+                + meta_args + tail)
+
+    def _run_attempt(audio_copy: bool) -> None:
+        base = _build_cmd(audio_copy)
+        if progress_cb and total_s > 0:
+            cmd = base + ['-progress', 'pipe:1', '-nostats', output]
+        else:
+            cmd = base + [output]
+        _ffmpeg_mux_exec(cmd, total_s=total_s, prog_start=prog_start,
+                         prog_end=prog_end, progress_cb=progress_cb)
+
+    try:
+        _run_attempt(True)
+    except VideoMuxError as e:
+        logger.warning('Mux with -c:a copy failed; retrying AAC: %s', e)
+        _run_attempt(False)
 
 
 def video_duration(path: str) -> float:
@@ -429,6 +603,8 @@ def render_lap(
     overlay_only:       bool  = False,         # render transparent overlay .mov (ProRes 4444)
     track_map_geometry: Optional[list] = None, # [{lat,lon}] OSM circuit outline, or None
     track_map_areas:    Optional[list] = None, # [{lats,lons}] OSM area polygons, or None
+    encode_options:     Optional[dict] = None,
+    container_choice:   str = 'match_source',
 ) -> None:
     """
     Render one video with telemetry overlay.
@@ -502,9 +678,24 @@ def render_lap(
                 f"Check that the video file is not corrupt: {video_path}"
             )
 
+    # Output file: VID_<local Y-M-D>_<H-M-S>.<ext>; metadata uses same instant in UTC.
+    vid_t0 = (float(f_start) / fps) if fps else 0.0
+    sess_t0 = vid_t0 - sync_offset
+    utc_first = absolute_time_at_elapsed(session, sess_t0) or _fallback_session_utc(session)
+    export_dir = os.path.dirname(os.path.abspath(out_path))
+    ext_vid = resolve_export_container_extension(
+        video_path or '', overlay_only, (container_choice or 'match_source').strip() or 'match_source',
+    )
+    local_dt = utc_first.astimezone()
+    out_path = _unique_export_path(os.path.join(
+        export_dir,
+        f"VID_{local_dt.strftime('%Y-%m-%d')}_{local_dt.strftime('%H-%M-%S')}{ext_vid}",
+    ))
+
     if overlay_only:
         import subprocess as _sp, threading as _th, queue as _q_mod
         _ov_blank = np.zeros((vh, vw, 4), dtype=np.uint8)
+        ct_tag = utc_first.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000000Z')
         _ov_proc  = _popen(
             ['ffmpeg', '-y', '-hide_banner',
              '-f', 'rawvideo', '-vcodec', 'rawvideo',
@@ -512,6 +703,7 @@ def render_lap(
              '-pix_fmt', 'rgba', '-i', 'pipe:0',
              '-vcodec', 'prores_ks', '-profile:v', '4444',
              '-pix_fmt', 'yuva444p10le',
+             '-metadata', f'creation_time={ct_tag}',
              out_path],
             stdin=_sp.PIPE, stderr=_sp.PIPE,
         )
@@ -745,11 +937,17 @@ def render_lap(
         log("  Muxing audio…")
         mux_dur_s = n_frames / fps if fps else 0.0
         try:
+            eo_mux = dict(encode_options) if isinstance(encode_options, dict) else {}
+            eo_mux['_export_mux_vw'] = vw
+            eo_mux['_export_mux_vh'] = vh
+            eo_mux['_export_mux_fps'] = float(fps)
             mux_audio(tmp_raw, video_path, out_path, encoder, crf,
                       audio_start=audio_start,
                       total_s=mux_dur_s,
                       prog_start=87.0, prog_end=100.0,
-                      progress_cb=progress_cb)
+                      progress_cb=progress_cb,
+                      creation_time_utc=utc_first,
+                      encode_options=eo_mux)
             os.remove(tmp_raw)
             prog(100, "")
             log(f"  ✓ Saved: {out_path}")

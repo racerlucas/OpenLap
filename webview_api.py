@@ -142,6 +142,8 @@ class WebviewAPI:
         self._auto_sync_batch_queue: list = []
         self._decode_sessions: dict[str, object] = {}
         self._decode_lock = threading.Lock()
+        # Cache FFmpeg nullsrc encoder probes (~10 calls); refresh periodically.
+        self._encoder_probe_cache: Optional[tuple] = None  # (monotonic_ts, dict[str, bool])
 
     # ── Called by main.py once the window is ready ────────────────────────────
     def set_window(self, window: webview.Window) -> None:
@@ -185,14 +187,131 @@ class WebviewAPI:
                 return {'ok': False, 'error': 'cannot open video'}
             fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
             frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
             cap.release()
             return {
                 'ok': True,
                 'fps': fps,
                 'frame_count': frame_count,
                 'duration': (frame_count / fps) if fps > 0 else 0.0,
+                'width': width,
+                'height': height,
             }
         except Exception as e:
+            return {'ok': False, 'error': str(e)}
+
+    def get_video_probe(self, video_path_or_paths) -> dict:
+        """Probe a video with ffprobe (preferred) and return container + stream info.
+
+        Returns:
+          {ok, path, extension, container, width, height, fps, duration, has_audio}
+        """
+        try:
+            # Accept either a single path string or an array (use first entry).
+            if isinstance(video_path_or_paths, (list, tuple)):
+                video_path = str(video_path_or_paths[0]) if video_path_or_paths else ''
+            else:
+                video_path = str(video_path_or_paths or '')
+
+            if not video_path:
+                return {'ok': False, 'error': 'no video path'}
+            if not os.path.exists(video_path):
+                return {'ok': False, 'error': 'video not found'}
+
+            ext = os.path.splitext(video_path)[1].lower()
+            container = ext[1:] if ext.startswith('.') else ext
+
+            # ffprobe gives authoritative stream fps and duration even for VFR.
+            from utils import _run
+
+            cmd = [
+                'ffprobe', '-v', 'quiet', '-print_format', 'json',
+                '-show_format', '-show_streams',
+                video_path,
+            ]
+            r = _run(cmd, capture_output=True, text=True, timeout=10)
+            if r.returncode == 0 and r.stdout:
+                data = json.loads(r.stdout or '{}') if r.stdout else {}
+                streams = data.get('streams') or []
+                fmt = data.get('format') or {}
+
+                v0 = next((s for s in streams if str(s.get('codec_type')) == 'video'), None)
+                a0 = next((s for s in streams if str(s.get('codec_type')) == 'audio'), None)
+                has_audio = a0 is not None
+                audio_bitrate_kbps = 0
+                if a0:
+                    try:
+                        br = int(a0.get('bit_rate') or 0)
+                        if br > 0:
+                            audio_bitrate_kbps = max(32, min(320, br // 1000))
+                    except (TypeError, ValueError):
+                        audio_bitrate_kbps = 0
+
+                width = int((v0 or {}).get('width') or 0)
+                height = int((v0 or {}).get('height') or 0)
+
+                # Prefer avg_frame_rate; fall back to r_frame_rate.
+                fps = 0.0
+                for key in ('avg_frame_rate', 'r_frame_rate'):
+                    fr = (v0 or {}).get(key)
+                    if fr and isinstance(fr, str) and '/' in fr:
+                        try:
+                            n, d = fr.split('/', 1)
+                            n, d = float(n), float(d)
+                            if d:
+                                fps = n / d
+                                if fps > 0:
+                                    break
+                        except Exception:
+                            pass
+
+                duration = 0.0
+                try:
+                    duration = float(fmt.get('duration') or 0.0)
+                except Exception:
+                    duration = 0.0
+                if duration <= 0 and v0 is not None:
+                    try:
+                        duration = float(v0.get('duration') or 0.0)
+                    except Exception:
+                        duration = 0.0
+
+                # Prefer format_name (ffprobe), but keep it short/stable.
+                fmt_name = str(fmt.get('format_name') or '').split(',')[0].strip()
+                if fmt_name:
+                    container = fmt_name
+
+                return {
+                    'ok': True,
+                    'path': os.path.abspath(video_path),
+                    'extension': ext,
+                    'container': container,
+                    'width': width,
+                    'height': height,
+                    'fps': fps,
+                    'duration': duration,
+                    'has_audio': has_audio,
+                    'audio_bitrate_kbps': int(audio_bitrate_kbps),
+                }
+
+            # Fallback: OpenCV probe (same as get_video_fps).
+            probe = self.get_video_fps(video_path)
+            if isinstance(probe, dict) and probe.get('ok'):
+                return {
+                    'ok': True,
+                    'path': os.path.abspath(video_path),
+                    'extension': ext,
+                    'container': container,
+                    'width': int(probe.get('width') or 0),
+                    'height': int(probe.get('height') or 0),
+                    'fps': float(probe.get('fps') or 0.0),
+                    'duration': float(probe.get('duration') or 0.0),
+                    'has_audio': True,  # unknown via OpenCV; assume yes
+                }
+            return {'ok': False, 'error': 'probe failed'}
+        except Exception as e:
+            logger.exception('get_video_probe failed')
             return {'ok': False, 'error': str(e)}
 
     def _decode_frame_b64(self, cap, frame_idx: int) -> tuple[bool, str]:
@@ -327,6 +446,33 @@ class WebviewAPI:
         cfg['all_telemetry_paths'] = self._config.all_telemetry_paths()
         return cfg
 
+    def _export_encoder_probe_dict(self) -> dict:
+        import time
+        now = time.monotonic()
+        c = getattr(self, '_encoder_probe_cache', None)
+        if c and (now - c[0]) < 90.0:
+            return c[1]
+        from export_encoder import probe_encoder_availability
+        d = probe_encoder_availability()
+        self._encoder_probe_cache = (now, d)
+        return d
+
+    def _sync_resolved_export_encoder(self) -> None:
+        from export_encoder import resolve_export_encoder
+        self._config.encoder = resolve_export_encoder(
+            getattr(self._config, 'export_video_codec', 'h264'),
+            getattr(self._config, 'export_encoder_family', 'auto'),
+            self._export_encoder_probe_dict(),
+        )
+
+    def _resolved_export_encoder(self, params: Optional[dict]) -> str:
+        from export_encoder import resolve_export_encoder
+        cfg = self._config
+        p = params if isinstance(params, dict) else {}
+        c = str(p.get('export_video_codec') or getattr(cfg, 'export_video_codec', 'h264') or 'h264')
+        f = str(p.get('export_encoder_family') or getattr(cfg, 'export_encoder_family', 'auto') or 'auto')
+        return resolve_export_encoder(c, f, self._export_encoder_probe_dict())
+
     def save_config(self, data: dict) -> None:
         # Update string fields
         simple_fields = [
@@ -336,12 +482,85 @@ class WebviewAPI:
         for f in simple_fields:
             if f in data:
                 setattr(self._config, f, data[f])
+        if 'export_video_codec' in data:
+            v = str(data.get('export_video_codec') or '').strip().lower()
+            if v in ('h264', 'h265', 'av1'):
+                self._config.export_video_codec = v
+        if 'export_encoder_family' in data:
+            v = str(data.get('export_encoder_family') or '').strip().lower()
+            if v in ('auto', 'cpu', 'nvenc', 'amf', 'qsv', 'videotoolbox'):
+                self._config.export_encoder_family = v
         if 'encoder' in data:
             self._config.encoder = str(data['encoder'])
         if 'crf' in data:
             self._config.crf = int(data['crf'])
         if 'workers' in data:
             self._config.workers = int(data['workers'])
+        if 'export_rate_mode' in data:
+            self._config.export_rate_mode = str(data['export_rate_mode']).lower()
+        if 'export_video_bitrate_kbps' in data:
+            try:
+                self._config.export_video_bitrate_kbps = max(0, int(data['export_video_bitrate_kbps']))
+            except (TypeError, ValueError):
+                pass
+        if 'export_video_max_bitrate_kbps' in data:
+            try:
+                self._config.export_video_max_bitrate_kbps = max(0, int(data['export_video_max_bitrate_kbps']))
+            except (TypeError, ValueError):
+                pass
+        if 'export_audio_bitrate_kbps' in data:
+            try:
+                self._config.export_audio_bitrate_kbps = max(0, min(320, int(data['export_audio_bitrate_kbps'])))
+            except (TypeError, ValueError):
+                pass
+        if 'export_two_pass' in data:
+            self._config.export_two_pass = bool(data['export_two_pass'])
+        if 'export_max_quality' in data:
+            self._config.export_max_quality = bool(data['export_max_quality'])
+        if 'export_container_choice' in data:
+            self._config.export_container_choice = str(data['export_container_choice'] or 'match_source').strip()
+        if 'export_target_res' in data:
+            self._config.export_target_res = str(data.get('export_target_res') or 'auto').strip() or 'auto'
+        if 'export_target_fps' in data:
+            self._config.export_target_fps = str(data.get('export_target_fps') or 'auto').strip() or 'auto'
+        if 'export_scope' in data:
+            v = str(data.get('export_scope') or 'full').strip()
+            if v in (
+                'selected_lap', 'lap_range', 'fastest_lap', 'all_laps', 'full', 'clip',
+            ):
+                self._config.export_scope = v
+        if 'export_padding' in data:
+            try:
+                p = float(data['export_padding'])
+                self._config.export_padding = max(0.0, min(120.0, p))
+            except (TypeError, ValueError):
+                pass
+        if 'export_clip_start_s' in data:
+            try:
+                self._config.export_clip_start_s = max(0.0, float(data['export_clip_start_s'] or 0.0))
+            except (TypeError, ValueError):
+                pass
+        if 'export_clip_end_s' in data:
+            try:
+                self._config.export_clip_end_s = max(0.0, float(data['export_clip_end_s'] or 0.0))
+            except (TypeError, ValueError):
+                pass
+        if 'export_overlay_only' in data:
+            self._config.export_overlay_only = bool(data['export_overlay_only'])
+        if 'export_lap_range_start' in data:
+            try:
+                self._config.export_lap_range_start = max(1, int(data['export_lap_range_start']))
+            except (TypeError, ValueError):
+                pass
+        if 'export_lap_range_end' in data:
+            raw = data['export_lap_range_end']
+            if raw is None or (isinstance(raw, str) and not str(raw).strip()):
+                self._config.export_lap_range_end = None
+            else:
+                try:
+                    self._config.export_lap_range_end = int(raw)
+                except (TypeError, ValueError):
+                    self._config.export_lap_range_end = None
         # Merge dict fields (JS may send partial updates)
         if 'offsets' in data and isinstance(data['offsets'], dict):
             self._config.offsets.update(data['offsets'])
@@ -360,7 +579,229 @@ class WebviewAPI:
                 pass
         if 'auto_sync_use_motion' in data:
             self._config.auto_sync_use_motion = bool(data['auto_sync_use_motion'])
+        try:
+            self._sync_resolved_export_encoder()
+        except Exception:
+            logger.debug('sync resolved export encoder failed', exc_info=True)
         self._config.save()
+
+    def _export_encode_options(self, params: Optional[dict]) -> dict:
+        """Merge RPC params with persisted config for FFmpeg ``encode_options``."""
+        cfg = self._config
+        p = params if isinstance(params, dict) else {}
+
+        def pick_int(key: str, default: int = 0,
+                     lo: Optional[int] = None, hi: Optional[int] = None) -> int:
+            v = p.get(key)
+            if v is None:
+                v = getattr(cfg, key, default)
+            try:
+                n = int(v)
+            except (TypeError, ValueError):
+                n = default
+            if lo is not None:
+                n = max(lo, n)
+            if hi is not None:
+                n = min(hi, n)
+            return n
+
+        rm = p.get('export_rate_mode')
+        if rm is None:
+            rm = getattr(cfg, 'export_rate_mode', 'cq')
+        tp = p.get('export_two_pass')
+        if tp is None:
+            tp = getattr(cfg, 'export_two_pass', False)
+        mq = p.get('export_max_quality')
+        if mq is None:
+            mq = getattr(cfg, 'export_max_quality', False)
+        tr = p.get('export_target_res')
+        if tr is None:
+            tr = getattr(cfg, 'export_target_res', 'auto')
+        tf = p.get('export_target_fps')
+        if tf is None:
+            tf = getattr(cfg, 'export_target_fps', 'auto')
+
+        return {
+            'export_rate_mode': str(rm or 'cq').lower(),
+            'export_video_bitrate_kbps': pick_int('export_video_bitrate_kbps', 0, lo=0),
+            'export_video_max_bitrate_kbps': pick_int('export_video_max_bitrate_kbps', 0, lo=0),
+            'export_audio_bitrate_kbps': pick_int('export_audio_bitrate_kbps', 0, lo=0, hi=320),
+            'export_two_pass': bool(tp),
+            'export_max_quality': bool(mq),
+            'export_target_res': str(tr or 'auto').strip() or 'auto',
+            'export_target_fps': str(tf or 'auto').strip() or 'auto',
+        }
+
+    @staticmethod
+    def _export_container_choice_val(params: Optional[dict], cfg) -> str:
+        p = params if isinstance(params, dict) else {}
+        v = p.get('export_container_choice')
+        if not v:
+            v = getattr(cfg, 'export_container_choice', 'match_source')
+        return str(v).strip() or 'match_source'
+
+    def estimate_export_size(self, params: dict) -> dict:
+        """Ballpark encoded size (+ container) for current export controls (first queued item)."""
+        from export_runner import load_any_session
+        from export_codec import (
+            normalized_container_extension,
+            resolve_export_container_extension,
+            estimate_segment_lengths_s,
+            estimate_effective_avg_video_kbps,
+            estimate_output_size_bytes,
+        )
+
+        p = dict(params) if isinstance(params, dict) else {}
+        items = p.get('items') or []
+        if not isinstance(items, list) or not items:
+            return {'ok': False, 'error': 'no items'}
+
+        overlay_only = bool(p.get('overlay_only', False))
+        if overlay_only:
+            return {
+                'ok': True,
+                'skipped': True,
+                'reason': 'overlay_prores',
+                'hint': 'ProRes 4444 overlay size is dominated by uncompressed RGBA throughput; '
+                        'see NLE disk space tips instead.',
+            }
+
+        it0 = items[0]
+        csv_path = it0.get('csv_path') or it0.get('csv')
+        videos = it0.get('video_paths') or it0.get('videos') or []
+        if not csv_path:
+            return {'ok': False, 'error': 'no csv_path'}
+        video_path = videos[0] if videos else None
+
+        eo = self._export_encode_options(p)
+
+        cfg = self._config
+        encoder = self._resolved_export_encoder(p)
+        if 'crf' in p:
+            try:
+                crf = max(0, min(51, int(p['crf'])))
+            except (TypeError, ValueError):
+                crf = int(getattr(cfg, 'crf', 18) or 18)
+        else:
+            crf = int(getattr(cfg, 'crf', 18) or 18)
+
+        w = 1280
+        h = 720
+        fps = 30.0
+        vd = 0.0
+        probe: dict = {}
+        if video_path:
+            probe = self.get_video_probe(video_path)
+            if isinstance(probe, dict) and probe.get('ok'):
+                w = int(probe.get('width') or w)
+                h = int(probe.get('height') or h)
+                fps = float(probe.get('fps') or fps)
+                vd = float(probe.get('duration') or 0.0)
+
+        try:
+            sess = load_any_session(csv_path)
+        except Exception as e:
+            return {'ok': False, 'error': f'load session: {e}'}
+
+        tw, th, tfps = w, h, fps
+        trs = str(eo.get('export_target_res') or 'auto').strip().lower()
+        if trs != 'auto' and 'x' in trs:
+            try:
+                a, b = trs.split('x', 1)
+                tw = max(2, int(float(a)) - int(float(a)) % 2)
+                th = max(2, int(float(b)) - int(float(b)) % 2)
+            except Exception:
+                tw, th = w, h
+        tfs = str(eo.get('export_target_fps') or 'auto').strip().lower()
+        if tfs != 'auto':
+            try:
+                tfps = float(tfs)
+            except Exception:
+                tfps = fps
+
+        scope = str(p.get('scope') or 'full')
+        try:
+            padding = float(p.get('padding', 5.0) or 0.0)
+        except (TypeError, ValueError):
+            padding = 5.0
+        try:
+            clip_start_s = float(p.get('clip_start_s', 0.0) or 0.0)
+        except (TypeError, ValueError):
+            clip_start_s = 0.0
+        try:
+            clip_end_s = float(p.get('clip_end_s', 0.0) or 0.0)
+        except (TypeError, ValueError):
+            clip_end_s = 0.0
+
+        segs = estimate_segment_lengths_s(
+            sess,
+            item=dict(it0) if isinstance(it0, dict) else {},
+            scope=scope,
+            padding=padding,
+            clip_start_s=clip_start_s,
+            clip_end_s=clip_end_s,
+            video_duration_s=vd,
+        )
+
+        vavg = estimate_effective_avg_video_kbps(
+            encoder,
+            eo['export_rate_mode'],
+            crf,
+            eo['export_video_bitrate_kbps'],
+            eo['export_video_max_bitrate_kbps'],
+            tw,
+            th,
+            tfps,
+        )
+        ab_cfg = int(eo['export_audio_bitrate_kbps'])
+        ab = ab_cfg
+        if ab <= 0:
+            try:
+                ab = int(probe.get('audio_bitrate_kbps') or 0)
+            except (TypeError, ValueError):
+                ab = 0
+        if ab <= 0:
+            ab = 128
+        tp = eo['export_two_pass']
+
+        total_bytes = 0
+        for sec in segs:
+            total_bytes += estimate_output_size_bytes(float(sec), vavg, float(ab), bool(tp))
+
+        cc = WebviewAPI._export_container_choice_val(p, cfg)
+        ext_eff = resolve_export_container_extension(video_path, overlay_only, cc)
+        total_seconds = float(sum(float(s) for s in segs))
+
+        hint = ''
+        if len(items) > 1:
+            hint = ('估算仅依据队列中第一项；导出多个节次 / 会话时体积为各自输出之和。')
+
+        return {
+            'ok': True,
+            'skipped': False,
+            'hint': hint,
+            'encoder': encoder,
+            'rate_mode': eo['export_rate_mode'],
+            'width': int(w),
+            'height': int(h),
+            'fps': fps,
+            'target_width': int(tw),
+            'target_height': int(th),
+            'target_fps': float(tfps),
+            'video_duration_s': vd,
+            'segment_lengths_s': segs,
+            'segment_count': len(segs),
+            'estimated_bytes': int(total_bytes),
+            'total_bytes': int(total_bytes),
+            'estimated_mb': round(total_bytes / (1024 * 1024), 2),
+            'total_seconds': total_seconds,
+            'effective_video_kbps': round(float(vavg), 1),
+            'audio_bitrate_kbps': int(ab),
+            'container_extension': ext_eff,
+            'output_extension': ext_eff,
+            'source_extension': normalized_container_extension(video_path),
+            'cq': crf,
+        }
 
     # ── Overlay ───────────────────────────────────────────────────────────────
     def get_overlay(self) -> dict:
@@ -1713,12 +2154,37 @@ class WebviewAPI:
         def done_cb(ok, msg=''):
             self._push('export_done', ok=ok, message=msg)
 
+        params = dict(params) if isinstance(params, dict) else {}
+        # Resolve final FFmpeg encoder (auto HW → CPU fallback) and log it once
+        codec = str(params.get('export_video_codec') or getattr(self._config, 'export_video_codec', 'h264') or 'h264')
+        fam   = str(params.get('export_encoder_family') or getattr(self._config, 'export_encoder_family', 'auto') or 'auto')
+        resolved = self._resolved_export_encoder(params)
+        params['encoder'] = resolved
+        try:
+            avail = self._export_encoder_probe_dict()
+            # Quick human hint for auto fallback
+            if fam.strip().lower() == 'auto' and resolved in ('libx264', 'libx265'):
+                hw_ok = [
+                    k for k, v in (avail or {}).items()
+                    if v and any(t in k for t in ('_nvenc', '_amf', '_qsv', 'videotoolbox'))
+                ]
+                if not hw_ok:
+                    log_cb(f"Resolved encoder: {resolved} (codec={codec}, family=auto) — no working HW encoder detected, fallback to CPU.")
+                else:
+                    log_cb(f"Resolved encoder: {resolved} (codec={codec}, family=auto) — HW encoders detected ({', '.join(hw_ok)}), but selected CPU for this codec/family.")
+            else:
+                log_cb(f"Resolved encoder: {resolved} (codec={codec}, family={fam})")
+        except Exception:
+            log_cb(f"Resolved encoder: {resolved} (codec={codec}, family={fam})")
+
         _workers = max(1, min(int(params.get('workers', 4)), os.cpu_count() or 4))
         _crf     = max(0, min(int(params.get('crf', 18)), 51))
+        eo = self._export_encode_options(params)
+        cc = WebviewAPI._export_container_choice_val(params, self._config)
         try:
             run_export(
                 items             = params.get('items', []),
-                scope             = params.get('scope', 'fastest'),
+                scope             = params.get('scope', 'full'),
                 export_path       = params.get('export_path', ''),
                 encoder           = params.get('encoder', 'libx264'),
                 crf               = _crf,
@@ -1742,6 +2208,8 @@ class WebviewAPI:
                 overlay_only          = params.get('overlay_only', False),
                 track_map_selections  = getattr(self._config, 'track_map_selections', {}) or {},
                 lap_flags             = getattr(self._config, 'lap_flags', {}) or {},
+                encode_options        = eo,
+                container_choice      = cc,
             )
         except Exception as e:
             done_cb(False, str(e))
@@ -1782,7 +2250,7 @@ class WebviewAPI:
                 proc = subprocess.Popen(
                     [str(node_exe), str(cli_js), 'install', 'chromium'],
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, env=env,
+                    text=True, encoding='utf-8', errors='replace', env=env,
                 )
                 # Read char-by-char so \r-terminated progress lines are captured
                 buf = ''
@@ -1840,51 +2308,35 @@ class WebviewAPI:
         Probe FFmpeg and report which video encoders are available.
         Returns {version, encoders: [{name, label, available}]} or {error}.
         """
-        import subprocess, shutil, os, sys
+        from utils import _run
+        from ffmpeg_paths import get_ffmpeg_bin
+        from export_encoder import encoder_rows_for_ui
 
-        ffmpeg_bin = os.environ.get('FFMPEG_BIN') or shutil.which('ffmpeg')
-        if not ffmpeg_bin:
-            base = sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
-            fname = 'ffmpeg.exe' if sys.platform == 'win32' else 'ffmpeg'
-            candidate = os.path.join(base, fname)
-            if os.path.isfile(candidate):
-                ffmpeg_bin = candidate
-        if not ffmpeg_bin:
-            return {'error': 'FFmpeg not found in PATH.'}
-
+        ffmpeg_bin = get_ffmpeg_bin()
         try:
-            r = subprocess.run([ffmpeg_bin, '-version'], capture_output=True, text=True, timeout=10)
-            first = r.stdout.splitlines()[0] if r.stdout else ''
+            r = _run([ffmpeg_bin, '-version'], capture_output=True, text=True, timeout=10)
+            first = (r.stdout or '').splitlines()[0] if r.stdout else ''
             version = first.split('version')[-1].strip().split(' ')[0] if 'version' in first else 'unknown'
         except Exception as e:
             return {'error': f'FFmpeg error: {e}'}
 
-        candidates = [
-            ('libx264',           'H.264 software'),
-            ('libx265',           'H.265 software'),
-            ('h264_nvenc',        'H.264 NVIDIA NVENC'),
-            ('hevc_nvenc',        'H.265 NVIDIA NVENC'),
-            ('h264_videotoolbox', 'H.264 Apple VideoToolbox'),
-            ('h264_amf',          'H.264 AMD AMF'),
-            ('h264_qsv',          'H.264 Intel QSV'),
-        ]
+        rows = encoder_rows_for_ui(self._export_encoder_probe_dict())
+        return {'version': version, 'encoders': rows}
 
-        def _probe(enc):
-            try:
-                r = subprocess.run(
-                    [ffmpeg_bin, '-f', 'lavfi', '-i', 'nullsrc=s=64x64:d=0.1',
-                     '-vcodec', enc, '-f', 'null', '-'],
-                    capture_output=True, timeout=8
-                )
-                return r.returncode == 0
-            except Exception:
-                return False
-
-        encoders = [
-            {'name': n, 'label': l, 'available': _probe(n)}
-            for n, l in candidates
-        ]
-        return {'version': version, 'encoders': encoders}
+    def resolve_export_encoder(self, codec, family=None) -> dict:
+        """Resolve UI codec + encoder family to FFmpeg ``-c:v`` name (uses cached probes)."""
+        from export_encoder import resolve_export_encoder as _res
+        if isinstance(codec, dict):
+            d = codec
+            codec = d.get('codec', 'h264')
+            family = d.get('family', 'auto') if family is None else family
+        if family is None:
+            family = 'auto'
+        try:
+            enc = _res(str(codec or 'h264'), str(family or 'auto'), self._export_encoder_probe_dict())
+            return {'ok': True, 'encoder': enc}
+        except Exception as e:
+            return {'ok': False, 'error': str(e)}
 
     # ── About ──────────────────────────────────────────────────────────────────
     def get_about_info(self) -> dict:

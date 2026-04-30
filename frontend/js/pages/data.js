@@ -545,7 +545,7 @@ ${renderLapTagCard(s)}
   <div class="sync-mark-row">
     <button class="btn btn-ok btn-sm" id="sv-mark">${isAuto ? '✓ 确认对齐圈起点' : '🏁 标记对齐圈起点'}</button>
     <button class="btn btn-secondary btn-sm" id="sv-auto-sync" title="${esc(autoSyncBtnTitle)}">${autoSyncBtnText}</button>
-    <label style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--text2);padding:0 4px;white-space:nowrap" title="开启后按帧/按秒/拖动优先走精确帧解码（更准但更吃性能）">
+    <label style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--text2);padding:0 4px;white-space:nowrap" title="仅对 ◀−1f / ▶+1f 使用 OpenCV 精确帧；进度条与 ±1s 仍优先 GPU 流畅定位">
       <input type="checkbox" id="sv-precise-mode" ${preciseMode ? 'checked' : ''}>
       精确模式
     </label>
@@ -1039,10 +1039,6 @@ ${renderLapTagCard(s)}
         await new Promise((r) => setTimeout(r, 10));
       }
     }
-    const getActiveOffset = () => {
-      const t = (s && (s._temp_sync_offset ?? s.sync_offset));
-      return Number.isFinite(Number(t)) ? Number(t) : 0;
-    };
     /** 对齐 seek：优先拖条/预览的临时 offset，否则已保存值（与 sessionEffectiveOffset 一致） */
     const baselineOrActiveOffsetForSeek = () => {
       const eff = sessionEffectiveOffset(s);
@@ -1298,7 +1294,7 @@ ${renderLapTagCard(s)}
       updatePlayBtn();
 
       if (!liveVideoEl || !videoPath) {
-        setStatus('视频未就绪');
+        setLoading(true, '视频未就绪（等待播放器初始化…）');
         playing = false;
         updatePlayBtn();
         return;
@@ -1338,7 +1334,7 @@ ${renderLapTagCard(s)}
       const ready = await ensureLiveReady();
       if (!playing) return;
       if (!ready) {
-        setStatus('视频未就绪');
+        setLoading(true, '视频未就绪（请稍候或关闭“播放”改用静态帧校准）');
         playing = false;
         updatePlayBtn();
         dbgSyncVideo('startPlayback_notReady', {
@@ -1499,8 +1495,7 @@ ${renderLapTagCard(s)}
       });
       await decodeToFrameCpu(targetFrame, quiet, forceWT);
     }
-    async function decodeToFrameScrubCoalesced(targetFrame, opts = {}) {
-      const forceOpenCv = !!opts.forceOpenCv;
+    async function decodeToFrameScrubCoalesced(targetFrame) {
       scrubDecodeQueuedTarget = Number(targetFrame || 0);
       if (scrubDecodeBusy) return;
       scrubDecodeBusy = true;
@@ -1508,7 +1503,7 @@ ${renderLapTagCard(s)}
         while (scrubDecodeQueuedTarget != null) {
           const latest = scrubDecodeQueuedTarget;
           scrubDecodeQueuedTarget = null;
-          await decodeToFrame(latest, false, { forceWriteTemp: true, forceOpenCv });
+          await decodeToFrame(latest, false, { forceWriteTemp: true });
         }
       } finally {
         scrubDecodeBusy = false;
@@ -1843,7 +1838,7 @@ ${renderLapTagCard(s)}
     scrub?.addEventListener('input', async () => {
       stopBeforeSeek();
       const target = parseInt(scrub.value || '0', 10) || 0;
-      logSyncVideoUI('ui_scrub_input', { target, playing, liveMode, gpuReady, preciseMode, curFrame, video: _dbgVideoState(liveVideoEl) });
+      logSyncVideoUI('ui_scrub_input', { target, playing, liveMode, gpuReady, curFrame, video: _dbgVideoState(liveVideoEl) });
       try {
         const tReq = frameToTime(target);
         const t = clampVideoTimeSec(tReq);
@@ -1851,23 +1846,7 @@ ${renderLapTagCard(s)}
         // Important: set temp offset first so applyMeta doesn't lock out auto-saved offsets.
         setTempOffset(frameToTime(nextFrame) - getRefLapElapsed());
 
-        // 精确模式：拖条必须走 OpenCV 逐帧（与 ±1f 一致），避免 WebView2 上 <video> currentTime 与进度条脱节或无法拖动感。
-        if (preciseMode && decoderSessionId) {
-          await decodeToFrameScrubCoalesced(nextFrame, { forceOpenCv: true });
-          dbgSyncVideo('scrub_precise_opencv', {
-            target,
-            tReq,
-            t,
-            nextFrame,
-            playing,
-            liveMode,
-            gpuReady,
-            curFrame,
-            video: _dbgVideoState(liveVideoEl),
-          });
-          return;
-        }
-
+        // 精确模式只作用于 ±1f；拖条始终走 <video> / 非强制 OpenCV，保持流畅粗定位。
         if (gpuReady && liveVideoEl) {
           switchToLiveMode();
           liveVideoEl.currentTime = t;
@@ -2017,8 +1996,8 @@ ${renderLapTagCard(s)}
         _config.session_info[s.csv_path] = { ...existing, sync_precise_mode: enabled };
         preciseMode = enabled;
         stopPlayback();
-        setStatus(enabled ? '已开启精确模式：按帧/拖动优先走精确解码' : '已关闭精确模式：优先 GPU 流畅播放');
-        // 勿 renderRight()：整卡重建会丢掉拖条临时 offset，且 WebView2 下重绑 range 易导致精确模式下拖不动。
+        setStatus(enabled ? '已开启精确模式：±1f 走 OpenCV 精确帧' : '已关闭精确模式：±1f 也走 GPU 流畅定位');
+        // 勿 renderRight()：整卡重建会丢掉拖条临时 offset。
       } catch (e) {
         try { preciseModeEl.checked = !enabled; } catch (_) {}
         preciseMode = !enabled;

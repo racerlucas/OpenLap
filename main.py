@@ -17,20 +17,40 @@ from pathlib import Path
 
 
 def _setup_logging() -> None:
+    # Windows multiprocessing uses "spawn": worker processes re-import the
+    # __main__ module and execute top-level code. If every worker attaches a
+    # RotatingFileHandler to the same file, log rollover will race and crash
+    # with WinError 32. Keep file logging in the main process only.
+    import multiprocessing as mp
+
+    is_child_process = (mp.parent_process() is not None) or (mp.current_process().name != 'MainProcess')
+
     log_dir = Path.home() / '.openlap' / 'logs'
     log_dir.mkdir(parents=True, exist_ok=True)
     fmt = logging.Formatter('%(asctime)s %(levelname)-8s %(name)s — %(message)s')
-    fh = logging.handlers.RotatingFileHandler(
-        str(log_dir / 'openlap.log'), maxBytes=2*1024*1024, backupCount=3, encoding='utf-8')
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(fmt)
     ch = logging.StreamHandler(sys.stdout)
     ch.setLevel(logging.INFO)
     ch.setFormatter(fmt)
     root = logging.getLogger()
-    root.setLevel(logging.DEBUG)
-    root.addHandler(fh)
+
+    # Avoid duplicate handlers if this module is imported multiple times.
+    if getattr(root, '_openlap_logging_configured', False):
+        return
+    setattr(root, '_openlap_logging_configured', True)
+
+    root.setLevel(logging.DEBUG if not is_child_process else logging.INFO)
     root.addHandler(ch)
+
+    if not is_child_process:
+        fh = logging.handlers.RotatingFileHandler(
+            str(log_dir / 'openlap.log'), maxBytes=2*1024*1024, backupCount=3, encoding='utf-8')
+        fh.setLevel(logging.DEBUG)
+        fh.setFormatter(fmt)
+        root.addHandler(fh)
+
+    # Matplotlib can be extremely chatty at DEBUG (e.g. font matching).
+    logging.getLogger('matplotlib').setLevel(logging.WARNING)
+    logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
 
 
 _setup_logging()

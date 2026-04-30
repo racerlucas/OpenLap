@@ -772,6 +772,118 @@ input[type="checkbox"] { accent-color: var(--acc); cursor: pointer; }
 /* Card primitives */
 .export-card { border-radius: var(--radius); border: 1px solid var(--border); background: var(--card); }
 
+.export-page .exp-export-path-row {
+  align-items: flex-start;
+  margin-bottom: 4px;
+}
+.export-page .exp-export-path-row > label:first-child {
+  padding-top: 4px;
+}
+.export-page .exp-export-path-stack {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.export-page .exp-path-input {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 3px 8px;
+  line-height: 1.25;
+  min-height: 0;
+}
+.export-page .exp-export-path-row .path-row {
+  align-items: center;
+}
+.export-page .exp-path-hint {
+  font-size: 9px;
+  line-height: 1.2;
+  color: var(--text3);
+  margin-top: 0;
+}
+.export-page .exp-static-val { font-size: 11px; color: var(--text2); }
+.export-page .exp-ffmpeg-foot { margin-top: 0; margin-bottom: 0; }
+
+/* Info tooltip (circled question mark, hover to show) */
+.export-page .info-tip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--text2);
+  font-size: 10px;
+  line-height: 1;
+  cursor: help;
+  user-select: none;
+  vertical-align: middle;
+  position: relative;
+}
+.export-page .info-tip:hover { border-color: rgba(79, 142, 247, 0.55); color: var(--acc); }
+.export-page .info-tip:focus { outline: none; border-color: rgba(79, 142, 247, 0.55); }
+.export-page .info-tip:hover::after,
+.export-page .info-tip:focus::after {
+  content: attr(data-tip);
+  white-space: pre-wrap;
+  position: absolute;
+  left: 18px;
+  top: -6px;
+  z-index: 50;
+  min-width: 240px;
+  max-width: 420px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(12, 14, 22, 0.96);
+  color: var(--text1);
+  font-size: 10px;
+  line-height: 1.45;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+.export-page .info-tip:hover::before,
+.export-page .info-tip:focus::before {
+  content: '';
+  position: absolute;
+  left: 13px;
+  top: 2px;
+  width: 0;
+  height: 0;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-right: 6px solid rgba(12, 14, 22, 0.96);
+  z-index: 51;
+}
+
+/* Export: Shutter-style rate mode panels (CQ / VBR / CBR) */
+.export-page .exp-rate-panel {
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(79, 142, 247, 0.22);
+  background: rgba(0, 0, 0, 0.18);
+}
+.export-page .exp-mode-hint {
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text2);
+  margin-bottom: 8px;
+}
+.export-page .exp-mode-hint strong { color: var(--acc); font-weight: 600; }
+.export-page .exp-mode-hint-muted {
+  display: block;
+  margin-top: 6px;
+  font-size: 9px;
+  color: var(--text3);
+  line-height: 1.35;
+}
+.export-page .exp-cbr-slot:empty { display: none; }
+.export-page .exp-cbr-slot:not(:empty) { display: block; }
+
 .card-header {
   display: flex;
   align-items: center;

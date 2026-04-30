@@ -146,6 +146,38 @@ def test_interpolate_at_after_end_returns_none(racebox_car_session):
     assert racebox_car_session.interpolate_at(last + 1.0) is None
 
 
+def test_absolute_time_at_elapsed_midpoint(racebox_car_session):
+    from data_model import absolute_time_at_elapsed
+    from datetime import timezone
+    pts = racebox_car_session.all_points
+    p0, p1 = pts[1], pts[2]
+    mid_t = (p0.elapsed + p1.elapsed) / 2
+    wt = absolute_time_at_elapsed(racebox_car_session, mid_t)
+    assert wt is not None
+    t_a = (p0.time if p0.time.tzinfo else p0.time.replace(tzinfo=timezone.utc))
+    t_b = (p1.time if p1.time.tzinfo else p1.time.replace(tzinfo=timezone.utc))
+    expected_mid = (t_a.timestamp() + t_b.timestamp()) / 2
+    assert abs(wt.astimezone(timezone.utc).timestamp() - expected_mid) < 0.05
+
+
+def test_absolute_time_before_start_extrapolates(racebox_car_session):
+    from data_model import absolute_time_at_elapsed
+    from datetime import timezone
+    pts = racebox_car_session.all_points
+    p0, p1 = pts[0], pts[1]
+    if pts[1].elapsed <= pts[0].elapsed + 1e-9:
+        return
+    t_extr = pts[0].elapsed - 0.5  # half second before first sample (padding window)
+    wt = absolute_time_at_elapsed(racebox_car_session, t_extr)
+    assert wt is not None
+    t_a = (p0.time if p0.time.tzinfo else p0.time.replace(tzinfo=timezone.utc))
+    t_b = (p1.time if p1.time.tzinfo else p1.time.replace(tzinfo=timezone.utc))
+    dt_el = float(p1.elapsed - p0.elapsed)
+    a = (t_extr - float(p0.elapsed)) / dt_el
+    exp_ts = t_a.timestamp() + a * (t_b.timestamp() - t_a.timestamp())
+    assert abs(wt.astimezone(timezone.utc).timestamp() - exp_ts) < 0.05
+
+
 # ── Error cases ────────────────────────────────────────────────────────────────
 
 def test_load_csv_missing_header_raises(tmp_path):

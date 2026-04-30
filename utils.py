@@ -17,16 +17,29 @@ def _win_flags() -> dict:
 
 def _run(cmd, **kwargs):
     """subprocess.run with no visible console window on Windows."""
+    from ffmpeg_paths import resolve_media_cmd
+
+    cmd = resolve_media_cmd(list(cmd))
     for k, v in _win_flags().items():
         kwargs.setdefault(k, v)
     kwargs.setdefault('capture_output', True)
+    # Windows 默认 cp936/gbk 解码 FFmpeg UTF-8 日志会触发 UnicodeDecodeError（_readerthread）
+    if kwargs.get('text') or kwargs.get('universal_newlines'):
+        kwargs.setdefault('encoding', 'utf-8')
+        kwargs.setdefault('errors', 'replace')
     return subprocess.run(cmd, **kwargs)
 
 
 def _popen(cmd, **kwargs):
     """subprocess.Popen with no visible console window on Windows."""
+    from ffmpeg_paths import resolve_media_cmd
+
+    cmd = resolve_media_cmd(list(cmd))
     for k, v in _win_flags().items():
         kwargs.setdefault(k, v)
+    if kwargs.get('text') or kwargs.get('universal_newlines'):
+        kwargs.setdefault('encoding', 'utf-8')
+        kwargs.setdefault('errors', 'replace')
     return subprocess.Popen(cmd, **kwargs)
 
 

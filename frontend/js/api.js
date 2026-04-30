@@ -71,10 +71,13 @@ const API = (() => {
       check_encoders:    () => ({ version: 'mock', encoders: [
         { name: 'libx264', label: 'H.264 software', available: true },
       ]}),
+      resolve_export_encoder: (codec, family) => ({ ok: true, encoder: 'libx264' }),
       get_about_info:    () => ({ version: '0.0.0-mock', python: '3.x.x', config: '~/.openlap/config.json' }),
       get_session_meta:  () => ({ track: '', laps: '', best: '', best_secs: null }),
       get_video_server_port:    () => 0,
       get_video_fps:            () => ({ ok: false, error: 'mock' }),
+      get_video_probe:          () => ({ ok: false, error: 'mock' }),
+      estimate_export_size:     () => ({ ok: false, error: 'mock' }),
       step_video_frame:         () => ({ ok: false, error: 'mock' }),
       decode_video_frame:       () => ({ ok: false, error: 'mock' }),
       open_decode_session:      () => ({ ok: false, error: 'mock' }),
@@ -166,6 +169,8 @@ const API = (() => {
     getSessionMeta:    (csvPath)       => call('get_session_meta', csvPath),
     getVideoServerPort:  ()             => call('get_video_server_port'),
     getVideoFps:         (videoPath)    => call('get_video_fps', videoPath),
+    getVideoProbe:       (videoPathOrPaths) => call('get_video_probe', videoPathOrPaths),
+    estimateExportSize:  (params)       => call('estimate_export_size', params),
     stepVideoFrame:      (videoPath, currentTime, direction) => call('step_video_frame', videoPath, currentTime, direction),
     decodeVideoFrame:    (videoPath, frameIdx, timeSec) => call('decode_video_frame', videoPath, frameIdx, timeSec),
     openDecodeSession:   (videoPath, cacheRadius) => call('open_decode_session', videoPath, cacheRadius),
@@ -177,6 +182,7 @@ const API = (() => {
 
     raceboxLogin:      (email, password) => call('racebox_login', email, password),
     checkEncoders:     ()              => call('check_encoders'),
+    resolveExportEncoder: (codec, family) => call('resolve_export_encoder', codec, family),
     getAboutInfo:      ()              => call('get_about_info'),
 
     convertXrkSession:        (csvPath)            => call('convert_xrk_session', csvPath),

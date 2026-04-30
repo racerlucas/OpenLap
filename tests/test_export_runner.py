@@ -5,6 +5,30 @@ import tempfile
 from unittest.mock import MagicMock, patch, call
 import pytest
 
+from export_runner import resolve_export_output_dir
+
+
+# ── Export directory resolution ────────────────────────────────────────────────
+
+
+def test_resolve_export_output_dir_user_path_wins(tmp_path):
+    out = tmp_path / 'my_exports'
+    out.mkdir()
+    assert resolve_export_output_dir(str(out), None) == str(out.resolve())
+
+
+def test_resolve_export_output_dir_empty_uses_video_folder(tmp_path):
+    vid = tmp_path / 'nested' / 'clip.mp4'
+    vid.parent.mkdir(parents=True)
+    vid.write_bytes(b'x')
+    assert resolve_export_output_dir('', str(vid)) == str(vid.parent.resolve())
+
+
+def test_resolve_export_output_dir_blank_whitespace_uses_video(tmp_path):
+    vid = tmp_path / 'a.mp4'
+    vid.write_bytes(b'')
+    assert resolve_export_output_dir('   \t  ', str(vid)) == str(tmp_path.resolve())
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -140,8 +164,10 @@ class TestScopeValues:
         import export_runner
         import inspect
         src = inspect.getsource(export_runner.run_export)
-        assert f"scope == '{scope}'" in src or f"scope == \"{scope}\"" in src, \
-            f"Scope '{scope}' has no matching branch in export_runner.run_export"
+        assert (
+            f"item_scope == '{scope}'" in src
+            or f"item_scope == \"{scope}\"" in src
+        ), f"Scope '{scope}' has no matching branch in export_runner.run_export"
 
     def test_all_laps_not_all(self):
         """JS must send 'all_laps', not 'all' — confirm the Python branch string."""

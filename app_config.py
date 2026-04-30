@@ -7,7 +7,7 @@ import logging
 import shutil
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +73,30 @@ class AppConfig:
     racebox_email:  str = ""
     # Stored for convenience; password is never persisted
     encoder: str   = 'libx264'
+    # UI: codec (H.264/HEVC/AV1) vs implementation (CPU / NVENC / …); ``encoder`` is the resolved FFmpeg name.
+    export_video_codec: str = 'h264'       # h264 | h265 | av1
+    export_encoder_family: str = 'auto'    # auto | cpu | nvenc | amf | qsv | videotoolbox
     crf:     int   = 18
     workers: int   = 4
+    # Export encoding (UI + FFmpeg) — names mirror webview `export_*` keys
+    export_rate_mode: str = 'cq'          # cq | vbr | cbr
+    export_video_bitrate_kbps: int = 0    # 0 = auto (Shutter-style heuristic)
+    export_video_max_bitrate_kbps: int = 0  # 0 = FFmpeg auto (= ~1.85× nominal)
+    export_audio_bitrate_kbps: int = 0    # 0 = 跟随原片（估算用 ffprobe；重编码 fallback 由 mux 决定）
+    export_two_pass: bool = False
+    export_max_quality: bool = False      # FFmpeg preset slower / higher overhead
+    export_container_choice: str = 'match_source'  # match_source | mp4 | mkv | mov …
+    # Export resample controls (UI only for now; enforced during mux).
+    export_target_res: str = 'auto'       # 'auto' | 'WIDTHxHEIGHT'
+    export_target_fps: str = 'auto'       # 'auto' | '30' | '29.97' ...
+    # Export page — timing / scope (persisted so next launch matches last session)
+    export_scope: str = 'full'            # selected_lap | lap_range | fastest_lap | all_laps | full | clip
+    export_padding: float = 5.0           # seconds before/after lap (UI 0–60)
+    export_clip_start_s: float = 0.0
+    export_clip_end_s: float = 0.0
+    export_overlay_only: bool = False
+    export_lap_range_start: int = 1
+    export_lap_range_end: Optional[int] = None  # None = unset / full range to last lap
     offset_sources:    Dict[str, str]  = field(default_factory=dict)
     # 'user' = manually confirmed, 'auto' = auto-detected (unconfirmed)
     auto_sync_failed:  List[str]       = field(default_factory=list)
@@ -243,6 +265,74 @@ def _from_dict(data: dict) -> AppConfig:
     else:
         overlay = overlay_from_dict(data.get('overlay', {}))
 
+    try:
+        _asw = int(data.get('auto_sync_workers', 2))
+    except (TypeError, ValueError):
+        _asw = 2
+    auto_sync_workers = max(1, min(8, _asw))
+
+    _enc_legacy = str(data.get('encoder', 'libx264') or 'libx264')
+    _codec = str(data.get('export_video_codec') or '').strip().lower()
+    _fam = str(data.get('export_encoder_family') or '').strip().lower()
+    if not _codec or not _fam:
+        try:
+            from export_encoder import infer_codec_and_family_from_legacy_encoder
+            ic, ifam = infer_codec_and_family_from_legacy_encoder(_enc_legacy)
+            _codec = _codec or ic
+            _fam = _fam or ifam
+        except Exception:
+            _codec = _codec or 'h264'
+            _fam = _fam or 'auto'
+    try:
+        from export_encoder import resolve_export_encoder
+        _enc_resolved = resolve_export_encoder(_codec, _fam)
+    except Exception:
+        _enc_resolved = _enc_legacy
+    _codec = _codec if _codec in ('h264', 'h265', 'av1') else 'h264'
+    _fam = _fam if _fam in ('auto', 'cpu', 'nvenc', 'amf', 'qsv', 'videotoolbox') else 'auto'
+    try:
+        _ab = int(data.get('export_audio_bitrate_kbps', 0) or 0)
+    except (TypeError, ValueError):
+        _ab = 0
+    _ab = max(0, min(320, _ab))
+
+    _scope = str(data.get('export_scope', 'full') or 'full').strip()
+    _valid_scopes = (
+        'selected_lap', 'lap_range', 'fastest_lap', 'all_laps', 'full', 'clip',
+    )
+    if _scope not in _valid_scopes:
+        _scope = 'full'
+    try:
+        _pad = float(data.get('export_padding', 5.0))
+    except (TypeError, ValueError):
+        _pad = 5.0
+    _pad = max(0.0, min(120.0, _pad))
+    try:
+        _c0 = float(data.get('export_clip_start_s', 0.0) or 0.0)
+    except (TypeError, ValueError):
+        _c0 = 0.0
+    try:
+        _c1 = float(data.get('export_clip_end_s', 0.0) or 0.0)
+    except (TypeError, ValueError):
+        _c1 = 0.0
+    _c0 = max(0.0, _c0)
+    _c1 = max(0.0, _c1)
+    try:
+        _lrs = int(data.get('export_lap_range_start', 1) or 1)
+    except (TypeError, ValueError):
+        _lrs = 1
+    _lrs = max(1, _lrs)
+    _lre_raw = data.get('export_lap_range_end', None)
+    if _lre_raw is None or (isinstance(_lre_raw, str) and not str(_lre_raw).strip()):
+        _lre: Optional[int] = None
+    else:
+        try:
+            _lre = int(_lre_raw)
+        except (TypeError, ValueError):
+            _lre = None
+        if _lre is not None and _lre < _lrs:
+            _lre = None
+
     return AppConfig(
         racebox_path   = data.get('racebox_path',   ''),
         aim_path       = data.get('aim_path',       ''),
@@ -259,13 +349,31 @@ def _from_dict(data: dict) -> AppConfig:
         active_preset  = active_preset,
         session_info   = data.get('session_info',   {}),
         racebox_email  = data.get('racebox_email',  ''),
-        encoder           = data.get('encoder',           'libx264'),
+        encoder           = _enc_resolved,
+        export_video_codec = _codec,
+        export_encoder_family = _fam,
         crf               = int(data.get('crf',           18)),
         workers           = int(data.get('workers',       4)),
+        export_rate_mode  = data.get('export_rate_mode', 'cq'),
+        export_video_bitrate_kbps    = max(0, int(data.get('export_video_bitrate_kbps') or 0)),
+        export_video_max_bitrate_kbps = max(0, int(data.get('export_video_max_bitrate_kbps') or 0)),
+        export_audio_bitrate_kbps = _ab,
+        export_two_pass   = bool(data.get('export_two_pass', False)),
+        export_max_quality = bool(data.get('export_max_quality', False)),
+        export_container_choice = (data.get('export_container_choice') or 'match_source').strip(),
+        export_target_res = str(data.get('export_target_res') or 'auto'),
+        export_target_fps = str(data.get('export_target_fps') or 'auto'),
+        export_scope         = _scope,
+        export_padding       = _pad,
+        export_clip_start_s  = _c0,
+        export_clip_end_s    = _c1,
+        export_overlay_only  = bool(data.get('export_overlay_only', False)),
+        export_lap_range_start = _lrs,
+        export_lap_range_end   = _lre,
         offset_sources       = data.get('offset_sources',       {}),
         auto_sync_failed     = data.get('auto_sync_failed',     []),
         auto_sync_enabled    = bool(data.get('auto_sync_enabled', False)),
-        auto_sync_workers    = max(1, min(8, int(data.get('auto_sync_workers', 2) or 2))),
+        auto_sync_workers    = auto_sync_workers,
         auto_sync_use_motion = bool(data.get('auto_sync_use_motion', False)),
         track_map_selections = data.get('track_map_selections', {}),
         lap_flags            = data.get('lap_flags', {}),

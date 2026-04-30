@@ -28,6 +28,15 @@ def test_default_has_gauges():
     assert len(AppConfig().overlay.gauges) > 0
 
 
+def test_default_export_scope_and_timing():
+    c = AppConfig()
+    assert c.export_scope == 'full'
+    assert c.export_padding == pytest.approx(5.0)
+    assert c.export_overlay_only is False
+    assert c.export_lap_range_start == 1
+    assert c.export_lap_range_end is None
+
+
 # ── Save / load round-trip ─────────────────────────────────────────────────────
 
 def test_save_and_load_round_trip(tmp_config_dir):
@@ -73,6 +82,27 @@ def test_presets_preserved(tmp_config_dir):
 
     loaded = AppConfig.load()
     assert 'MyPreset' in loaded.presets
+
+
+def test_export_timing_prefs_round_trip(tmp_config_dir):
+    cfg = AppConfig()
+    cfg.export_scope = 'lap_range'
+    cfg.export_padding = 7.5
+    cfg.export_clip_start_s = 1.25
+    cfg.export_clip_end_s = 99.0
+    cfg.export_overlay_only = True
+    cfg.export_lap_range_start = 2
+    cfg.export_lap_range_end = 8
+    cfg.save()
+
+    loaded = AppConfig.load()
+    assert loaded.export_scope == 'lap_range'
+    assert loaded.export_padding == pytest.approx(7.5)
+    assert loaded.export_clip_start_s == pytest.approx(1.25)
+    assert loaded.export_clip_end_s == pytest.approx(99.0)
+    assert loaded.export_overlay_only is True
+    assert loaded.export_lap_range_start == 2
+    assert loaded.export_lap_range_end == 8
 
 
 # ── Missing / corrupt file ─────────────────────────────────────────────────────

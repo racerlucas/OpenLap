@@ -122,6 +122,52 @@ def test_n_sectors_constant():
     assert _N_SECTORS > 0
 
 
+# ── Video encode flags (CQ vs CBR/VBR) ────────────────────────────────────────
+
+class TestBuildVideoEncodeFlags:
+    def test_cq_libx264_uses_crf_not_bitrate(self):
+        from video_renderer import _build_video_encode_flags
+
+        f = _build_video_encode_flags('libx264', 20, {
+            'export_rate_mode': 'cq',
+            'export_video_bitrate_kbps': 0,
+        })
+        joined = ' '.join(f)
+        assert '-crf' in joined
+        assert '20' in joined
+        assert '-b:v' not in joined
+
+    def test_cbr_libx264_auto_derives_bitrate_no_crf(self):
+        from video_renderer import _build_video_encode_flags
+
+        f = _build_video_encode_flags('libx264', 20, {
+            'export_rate_mode': 'cbr',
+            'export_video_bitrate_kbps': 0,
+            '_export_mux_vw': 1920,
+            '_export_mux_vh': 1080,
+            '_export_mux_fps': 30.0,
+        })
+        joined = ' '.join(f)
+        assert '-crf' not in joined
+        assert '-b:v' in f
+        assert '-minrate' in joined
+
+    def test_vbr_nvenc_explicit_bitrate_skips_cq(self):
+        from video_renderer import _build_video_encode_flags
+
+        f = _build_video_encode_flags('h264_nvenc', 18, {
+            'export_rate_mode': 'vbr',
+            'export_video_bitrate_kbps': 12000,
+            'export_video_max_bitrate_kbps': 0,
+            '_export_mux_vw': 1920,
+            '_export_mux_vh': 1080,
+            '_export_mux_fps': 30.0,
+        })
+        joined = ' '.join(f)
+        assert '-cq' not in joined
+        assert '12000k' in joined
+
+
 # ── Sync offset frame range calculation ───────────────────────────────────────
 
 class TestSyncOffsetFrameRange:

@@ -60,8 +60,9 @@
 
 同步偏移决定仪表与视频时间轴的对齐。
 
-- **自动同步（推荐）**：在 Settings 打开 Auto Sync  
-  应用会根据视频运动信号与 G 值做相关匹配自动求偏移。
+- **自动同步（推荐）**：在 Settings 打开「扫描后启用自动同步」  
+  默认用**元数据时间线**（遥测节起始时间 vs 视频的创建时间 / 内嵌 SMPTE 时间码等）估算偏移并吸附到视频帧，不做画面运动分析。  
+  可选在 Settings 打开「**启用运动精细对齐**」：再对画面运动与 G 力做互相关（固定车载机位更合适；头盔/防抖画面易失败）。
 - **手动同步**：在 Data 页对准 Lap 起点后点击 **Mark**
 
 > GPX 不含 G 值，通常需要手动同步。
@@ -178,19 +179,41 @@ Data 页提供“**切圈**”入口，包含两种方式：
 
 ### 依赖
 
-- Python 3.10+
-- FFmpeg 在 PATH 中可用
+- Python 3.10-3.13
+- **FFmpeg**：系统 `PATH` 中能调用 `ffmpeg` / `ffprobe` 即可；或在仓库根目录执行下面的可选步骤，把二进制下载到 `third_party/ffmpeg/`（与 `OpenLap.spec` / 运行时的查找逻辑一致，便于不装全局 FFmpeg）。
 
 ### 安装
 
+**建议**在虚拟环境里安装（避免与系统/其他项目的包冲突）：
+
 ```bash
-pip install -e .
+# 仓库根目录下
+python -m venv .venv
+```
+
+激活虚拟环境：
+
+- **Windows（PowerShell）**：`.\.venv\Scripts\Activate.ps1`
+- **Windows（cmd）**：`.\.venv\Scripts\activate.bat`
+- **macOS / Linux**：`source .venv/bin/activate`
+
+然后安装本项目为**可编辑模式**（改代码后无需重装即可 `python main.py` 生效）：
+
+```bash
+python -m pip install -U pip
+python -m pip install -e .
+```
+
+可选（Windows，本地 FFmpeg 放入仓库，便于开发与打包）：
+
+```bash
+python tools/fetch_ffmpeg.py
 ```
 
 可选（RaceBox 云下载）：
 
 ```bash
-pip install -e ".[racebox-download]"
+python -m pip install -e ".[racebox-download]"
 playwright install chromium
 ```
 
@@ -206,7 +229,10 @@ python main.py
 
 ## Windows 打包
 
+建议先把 FFmpeg 放进仓库（否则需保证目标机器 PATH 上已有 ffmpeg/ffprobe，或与 `OpenLap.spec` 同目录放置可执行文件）：
+
 ```bash
+python tools/fetch_ffmpeg.py
 pip install pyinstaller
 pyinstaller OpenLap.spec --clean -y
 ```

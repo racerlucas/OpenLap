@@ -7,7 +7,7 @@ has no GUI imports.
 from __future__ import annotations
 import os
 import re
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
 
 def load_any_session(path: str):
@@ -22,6 +22,31 @@ def load_any_session(path: str):
     if aim_data.is_aim_csv(path):
         return aim_data.load_csv(path)
     return racebox_data.load_csv(path)
+
+
+def resolve_export_output_dir(export_path: str, first_source_video: Optional[str] = None) -> str:
+    """Directory for exported videos.
+
+    If *export_path* is non-empty, that folder is used (created by caller if needed).
+    If empty, use the directory of *first_source_video* (first matched clip — not the
+    joined-cache path). If neither applies, fall back to the process working directory.
+    """
+    p = (export_path or '').strip()
+    if p:
+        return os.path.abspath(p)
+    vp = (first_source_video or '').strip()
+    if vp:
+        try:
+            absv = os.path.abspath(vp)
+            if os.path.isfile(absv):
+                d = os.path.dirname(absv)
+                if d:
+                    return d
+            if os.path.isdir(absv):
+                return absv
+        except Exception:
+            pass
+    return os.path.abspath(os.getcwd())
 
 
 def _export_stem(sess, scope_label: str) -> str:
@@ -67,8 +92,11 @@ def run_export(
     ref_lap_num:          int  = 0,
     track_map_selections: dict = None,
     lap_flags: dict = None,
+    encode_options: Optional[dict] = None,
+    container_choice: str = 'match_source',
 ) -> None:
     """Render one or more sessions.  Designed to be called from a background thread."""
+    from export_codec import resolve_export_container_extension
     from video_renderer import render_lap, RenderJob, concat_videos
     from data_model import Lap
     from utils import compute_lean_angle
@@ -117,6 +145,8 @@ def run_export(
         progress_cb(base + within, msg)
 
     errors = []
+    _enc_opts: Dict = encode_options if isinstance(encode_options, dict) else {}
+    _cc = str(container_choice or 'match_source').strip() or 'match_source'
 
     for item in items:
         # Accept both the webview field names (csv_path / video_paths / sync_offset)
@@ -159,10 +189,11 @@ def run_export(
             done_jobs += 1
             continue
 
-        _ext = '.mov' if overlay_only else '.mp4'
-
         # ── Join phase ────────────────────────────────────────────────────────
-        video_path = videos[0] if videos else None
+        # Keep first source path for default export dir (same folder as camera file;
+        # not ~/.openlap/video_cache when segments are joined).
+        first_src_for_export_dir = videos[0] if videos else None
+        video_path = first_src_for_export_dir
         tmp_joined = None
         join_share = 0.0
         if len(videos) > 1:
@@ -188,6 +219,18 @@ def run_export(
                     errors.append(str(e))
                     done_jobs += 1
                     continue
+
+        _ext = resolve_export_container_extension(str(video_path or ''), overlay_only, _cc)
+
+        export_dir = resolve_export_output_dir(export_path, first_src_for_export_dir)
+        try:
+            os.makedirs(export_dir, exist_ok=True)
+        except OSError as e:
+            log(f"  ✗ Cannot use export directory {export_dir!r}: {e}")
+            errors.append(str(e))
+            done_jobs += 1
+            continue
+        log(f"  Export directory: {export_dir}")
 
         # ── Per-session info overrides (manual metadata) ─────────────────────
         info_overrides = session_info.get(abs_csv, {})
@@ -268,8 +311,8 @@ def run_export(
                     continue
                 lap   = sess.laps[lap_idx]
                 label = f"Lap{lap_idx + 1:02d}"
-                out   = os.path.join(export_path, f"{_export_stem(sess, label)}{_ext}")
-                log(f"  Lap {lap_idx + 1}: {lap.duration:.3f}s → {os.path.basename(out)}")
+                out   = os.path.join(export_dir, f'_openlap_export_pending{_ext}')
+                log(f"  Lap {lap_idx + 1}: {lap.duration:.3f}s")
                 render_lap(
                     video_path, out, sess, RenderJob(_export_stem(sess, label), lap),
                     sync_offset=offset, encoder=encoder, crf=crf,
@@ -282,6 +325,8 @@ def run_export(
                     overlay_only=overlay_only,
                     track_map_geometry=_track_map_geometry,
                     track_map_areas=_track_map_areas,
+                    encode_options=_enc_opts,
+                    container_choice=_cc,
                 )
 
             elif item_scope == 'fastest':
@@ -290,8 +335,8 @@ def run_export(
                     log("  ✗ No timed lap found")
                     done_jobs += 1
                     continue
-                out = os.path.join(export_path, f"{_export_stem(sess, 'Fastest')}{_ext}")
-                log(f"  Fastest lap: {lap.duration:.3f}s → {os.path.basename(out)}")
+                out = os.path.join(export_dir, f'_openlap_export_pending{_ext}')
+                log(f"  Fastest lap: {lap.duration:.3f}s")
                 render_lap(
                     video_path, out, sess, RenderJob(_export_stem(sess, 'Fastest'), lap),
                     sync_offset=offset, encoder=encoder, crf=crf,
@@ -304,6 +349,8 @@ def run_export(
                     overlay_only=overlay_only,
                     track_map_geometry=_track_map_geometry,
                     track_map_areas=_track_map_areas,
+                    encode_options=_enc_opts,
+                    container_choice=_cc,
                 )
 
             elif item_scope == 'all_laps':
@@ -314,7 +361,7 @@ def run_export(
                     continue
                 for i, lap in enumerate(laps, 1):
                     label = f"Lap{i:02d}"
-                    out = os.path.join(export_path, f"{_export_stem(sess, label)}{_ext}")
+                    out = os.path.join(export_dir, f'_openlap_export_pending{_ext}')
                     log(f"  Lap {i}/{len(laps)}: {lap.duration:.3f}s")
                     render_lap(
                         video_path, out, sess, RenderJob(_export_stem(sess, label), lap),
@@ -327,23 +374,26 @@ def run_export(
                         info_overrides=info_overrides,
                         overlay_only=overlay_only,
                         track_map_geometry=_track_map_geometry,
-                    track_map_areas=_track_map_areas,
+                        track_map_areas=_track_map_areas,
+                        encode_options=_enc_opts,
+                        container_choice=_cc,
                     )
 
             elif item_scope == 'lap_range':
-                timed     = sess.timed_laps
+                # All laps including outlap / inlap (ordered by lap_num)
+                ordered = sorted(sess.laps or [], key=lambda lap: int(getattr(lap, 'lap_num', 0)))
                 start_num = item.get('lap_range_start')
                 end_num   = item.get('lap_range_end')
-                if not timed:
-                    log("  ✗ No timed laps found")
+                if not ordered:
+                    log("  ✗ No laps in session")
                     done_jobs += 1
                     continue
                 if start_num is None:
-                    start_num = timed[0].lap_num
+                    start_num = ordered[0].lap_num
                 if end_num is None:
-                    end_num = timed[-1].lap_num
+                    end_num = ordered[-1].lap_num
                 start_num, end_num = int(start_num), int(end_num)
-                included = [l for l in timed if start_num <= l.lap_num <= end_num]
+                included = [l for l in ordered if start_num <= l.lap_num <= end_num]
                 if not included:
                     log(f"  ✗ No timed laps in range {start_num}–{end_num}")
                     done_jobs += 1
@@ -357,8 +407,8 @@ def run_export(
                 first_n = included[0].lap_num
                 last_n  = included[-1].lap_num
                 label   = f"Laps{first_n:02d}-{last_n:02d}"
-                out = os.path.join(export_path, f"{_export_stem(sess, label)}{_ext}")
-                log(f"  Lap range {first_n}–{last_n} ({len(included)} laps) → {os.path.basename(out)}")
+                out = os.path.join(export_dir, f'_openlap_export_pending{_ext}')
+                log(f"  Lap range {first_n}–{last_n} ({len(included)} laps)")
                 render_lap(
                     video_path, out, sess, RenderJob(label, range_lap),
                     sync_offset=offset, encoder=encoder, crf=crf,
@@ -371,11 +421,13 @@ def run_export(
                     overlay_only=overlay_only,
                     track_map_geometry=_track_map_geometry,
                     track_map_areas=_track_map_areas,
+                    encode_options=_enc_opts,
+                    container_choice=_cc,
                 )
 
             elif item_scope == 'full':
-                out = os.path.join(export_path, f"{_export_stem(sess, 'Full')}{_ext}")
-                log(f"  Full session → {os.path.basename(out)}")
+                out = os.path.join(export_dir, f'_openlap_export_pending{_ext}')
+                log("  Full session")
                 render_lap(
                     video_path or '', out, sess, RenderJob(_export_stem(sess, 'Full'), None),
                     sync_offset=offset, encoder=encoder, crf=crf,
@@ -388,6 +440,8 @@ def run_export(
                     overlay_only=overlay_only,
                     track_map_geometry=_track_map_geometry,
                     track_map_areas=_track_map_areas,
+                    encode_options=_enc_opts,
+                    container_choice=_cc,
                 )
 
             elif item_scope == 'clip':
@@ -409,8 +463,8 @@ def run_export(
                     duration = c_end - c_start,
                 )
                 tag = f"Clip_{int(c_start)}s_{int(c_end)}s"
-                out = os.path.join(export_path, f"{_export_stem(sess, tag)}{_ext}")
-                log(f"  Clip {c_start:.1f}s–{c_end:.1f}s → {os.path.basename(out)}")
+                out = os.path.join(export_dir, f'_openlap_export_pending{_ext}')
+                log(f"  Clip {c_start:.1f}s–{c_end:.1f}s")
                 render_lap(
                     video_path or '', out, sess, RenderJob(_export_stem(sess, tag), clip_lap),
                     sync_offset=offset, encoder=encoder, crf=crf,
@@ -423,6 +477,8 @@ def run_export(
                     overlay_only=overlay_only,
                     track_map_geometry=_track_map_geometry,
                     track_map_areas=_track_map_areas,
+                    encode_options=_enc_opts,
+                    container_choice=_cc,
                 )
 
         except Exception as e:

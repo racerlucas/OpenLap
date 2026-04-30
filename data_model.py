@@ -10,7 +10,7 @@ loaders must populate the same fields; UI must not invent parallel telemetry sha
 """
 from __future__ import annotations
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 
@@ -170,6 +170,51 @@ class Session:
             lean_angle=L('lean_angle'), elapsed=elapsed, lap_elapsed=lap_elapsed,
             rpm=L('rpm'), exhaust_temp=L('exhaust_temp'),
         )
+
+
+def absolute_time_at_elapsed(session: 'Session', elapsed: float) -> Optional[datetime]:
+    """Wall-clock instant (UTC-aware) aligned with telemetry ``elapsed`` seconds.
+
+    Interpolates *time* between samples (unlike :meth:`interpolate_at`, which
+    copies ``p0.time``). Extrapolates along the first or last segment when
+    *elapsed* is outside the logged range (e.g. export padding before lap start).
+    """
+    pts = session.all_points
+    if len(pts) == 0:
+        return None
+
+    def _as_utc(dt: datetime) -> datetime:
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
+    def _elapsed_to_utc(p0: DataPoint, p1: DataPoint, t: float) -> datetime:
+        t0, t1 = _as_utc(p0.time), _as_utc(p1.time)
+        dt_el = float(p1.elapsed) - float(p0.elapsed)
+        if dt_el <= 1e-12:
+            return t0
+        a = (t - float(p0.elapsed)) / dt_el
+        ts0, ts1 = t0.timestamp(), t1.timestamp()
+        return datetime.fromtimestamp(ts0 + a * (ts1 - ts0), tz=timezone.utc)
+
+    if elapsed <= float(pts[0].elapsed):
+        if len(pts) >= 2:
+            return _elapsed_to_utc(pts[0], pts[1], elapsed)
+        return _as_utc(pts[0].time)
+
+    if elapsed >= float(pts[-1].elapsed):
+        if len(pts) >= 2:
+            return _elapsed_to_utc(pts[-2], pts[-1], elapsed)
+        return _as_utc(pts[-1].time)
+
+    lo, hi = 0, len(pts) - 1
+    while lo < hi - 1:
+        mid = (lo + hi) // 2
+        if pts[mid].elapsed <= elapsed:
+            lo = mid
+        else:
+            hi = mid
+    return _elapsed_to_utc(pts[lo], pts[hi], elapsed)
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:

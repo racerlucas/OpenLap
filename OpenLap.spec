@@ -8,18 +8,45 @@
 # Output: dist/OpenLap/  (onedir, faster startup than onefile)
 #
 # Requires:
-#   - ffmpeg.exe / ffprobe.exe placed next to this spec (or on PATH)
+#   - On Windows, each PyInstaller run auto-downloads **latest** FFmpeg (BtbN
+#     GitHub release) into third_party/ffmpeg/win64/bin/ via tools/fetch_ffmpeg.py.
+#     Skip: set environment variable SKIP_FFMPEG_FETCH=1
+#   - Fallback if fetch skipped / failed: ffmpeg.exe next to this spec or PATH (ffmpeg_paths.py)
 #   - All Python deps installed in the active environment
 
-import os, sys, shutil
+import os, sys, shutil, subprocess as _sp
 from pathlib import Path
 import playwright as _pw_mod
 
 HERE = Path(SPECPATH)
 
+# ── Auto-fetch FFmpeg (Windows) before bundling ───────────────────────────────
+if (
+    sys.platform == 'win32'
+    and os.environ.get('SKIP_FFMPEG_FETCH', '').strip().lower() not in ('1', 'true', 'yes')
+):
+    _ff_script = HERE / 'tools' / 'fetch_ffmpeg.py'
+    if _ff_script.is_file():
+        print('[OpenLap.spec] Downloading latest FFmpeg → third_party/ffmpeg/win64/bin/ …')
+        _pr = _sp.run(
+            [sys.executable, str(_ff_script), '--latest'],
+            cwd=str(HERE),
+        )
+        if _pr.returncode != 0:
+            raise RuntimeError(
+                '[OpenLap.spec] FFmpeg fetch failed (exit %s). '
+                'Check network, or set SKIP_FFMPEG_FETCH=1 and place ffmpeg.exe/ffprobe.exe manually.'
+                % _pr.returncode
+            )
+    else:
+        print('[OpenLap.spec] warning: tools/fetch_ffmpeg.py missing — using existing third_party / PATH')
+
 # ── Locate ffmpeg / ffprobe ───────────────────────────────────────────────────
 def _find_bin(name):
-    """Find ffmpeg/ffprobe: look next to spec first, then PATH."""
+    """Find ffmpeg/ffprobe: prefer staged third_party, then spec dir, then PATH."""
+    staged = HERE / 'third_party' / 'ffmpeg' / 'win64' / 'bin' / (name + '.exe')
+    if staged.is_file():
+        return str(staged)
     local = HERE / (name + '.exe')
     if local.is_file():
         return str(local)
@@ -59,6 +86,16 @@ for dll in _dlls:
 for _bin, _name in [(FFMPEG_BIN, 'ffmpeg.exe'), (FFPROBE_BIN, 'ffprobe.exe')]:
     if _bin:
         datas.append((_bin, '.'))
+
+# FFmpeg build info (when staged via tools/fetch_ffmpeg.py)
+_ff_info = HERE / 'third_party' / 'ffmpeg' / 'win64' / 'BUILD_INFO.json'
+if _ff_info.is_file():
+    datas.append((str(_ff_info), 'third_party/ffmpeg/win64'))
+
+# Licenses / notices
+_lic_dir = HERE / 'licenses'
+if _lic_dir.is_dir():
+    datas.append((str(_lic_dir), 'licenses'))
 
 # ── Hidden imports ────────────────────────────────────────────────────────────
 # PyInstaller cannot automatically detect dynamically-imported modules.

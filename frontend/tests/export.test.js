@@ -311,4 +311,119 @@ describe('Export page — previewSession → selectedItems wiring', () => {
     // selectedItems should not have changed after unmount
     expect(State.get('selectedItems')).toEqual(before);
   });
+
+  test('CQ default does not call estimateExportSize', async () => {
+    const est = vi.fn(async () => ({ ok: true, skipped: false, estimated_bytes: 0 }));
+    globalThis.API = makeAPI({ estimateExportSize: est });
+    const freshRouter = makeRouter();
+    globalThis.Router = freshRouter;
+    loadPage('pages/export.js');
+    const freshPage = freshRouter.getPage('export');
+    const freshContainer = makeContainer();
+
+    State.set('previewSession', PREVIEW);
+    await freshPage.mount(freshContainer);
+    await new Promise(res => setTimeout(res, 400));
+    expect(est).not.toHaveBeenCalled();
+
+    freshPage.unmount();
+    cleanupContainer(freshContainer);
+  }, 10_000);
+
+  test('VBR mode calls estimateExportSize and fills volume hint', async () => {
+    const est = vi.fn(async () => ({
+      ok: true,
+      skipped: false,
+      estimated_bytes: 10 * 1024 * 1024,
+      total_bytes: 10 * 1024 * 1024,
+      total_seconds: 40,
+      segment_lengths_s: [40],
+      output_extension: '.mp4',
+      container_extension: '.mp4',
+    }));
+    globalThis.API = makeAPI({
+      estimateExportSize: est,
+      getConfig: vi.fn(async () => ({
+        export_path: '',
+        encoder: 'libx264',
+        export_video_codec: 'h264',
+        export_encoder_family: 'auto',
+        crf: 18,
+        workers: 4,
+        export_container_choice: 'match_source',
+        export_rate_mode: 'vbr',
+        export_video_bitrate_kbps: 8000,
+        export_video_max_bitrate_kbps: 0,
+        export_audio_bitrate_kbps: 0,
+        export_max_quality: false,
+        export_target_res: 'auto',
+        export_target_fps: 'auto',
+        export_scope: 'full',
+        export_padding: 5,
+        export_clip_start_s: 0,
+        export_clip_end_s: 0,
+        export_overlay_only: false,
+        export_lap_range_start: 1,
+        export_lap_range_end: null,
+        all_telemetry_paths: [],
+        offsets: {},
+        bike_overrides: {},
+        overlay: { is_bike: false, theme: 'Dark', gauges: [] },
+      })),
+    });
+    const freshRouter = makeRouter();
+    globalThis.Router = freshRouter;
+    loadPage('pages/export.js');
+    const freshPage = freshRouter.getPage('export');
+    const freshContainer = makeContainer();
+
+    State.set('previewSession', PREVIEW);
+    await freshPage.mount(freshContainer);
+    await new Promise(res => setTimeout(res, 400));
+    expect(est).toHaveBeenCalled();
+    const hint = freshContainer.querySelector('#exp-vbr-cbr-size-hint')?.textContent || '';
+    expect(hint).toMatch(/MB/);
+
+    freshPage.unmount();
+    cleanupContainer(freshContainer);
+  }, 10_000);
+
+  test('resolution and fps dropdowns respect probe maxima', async () => {
+    globalThis.API = makeAPI({
+      getVideoProbe: vi.fn(async () => ({
+        ok: true,
+        width: 1280,
+        height: 720,
+        fps: 30,
+        duration: 60,
+        extension: '.mp4',
+        has_audio: true,
+      })),
+    });
+    const freshRouter = makeRouter();
+    globalThis.Router = freshRouter;
+    loadPage('pages/export.js');
+    const freshPage = freshRouter.getPage('export');
+    const freshContainer = makeContainer();
+
+    State.set('previewSession', PREVIEW);
+    await freshPage.mount(freshContainer);
+    await new Promise(res => setTimeout(res, 80));
+
+    const resSel = freshContainer.querySelector('#exp-res');
+    const fpsSel = freshContainer.querySelector('#exp-fps');
+    for (const opt of resSel?.options ?? []) {
+      if (opt.value === 'auto') continue;
+      const [ww, hh] = opt.value.split('x').map(n => parseInt(n, 10));
+      expect(ww).toBeLessThanOrEqual(1280);
+      expect(hh).toBeLessThanOrEqual(720);
+    }
+    for (const opt of fpsSel?.options ?? []) {
+      if (opt.value === 'auto') continue;
+      expect(parseFloat(opt.value)).toBeLessThanOrEqual(30 + 1e-6);
+    }
+
+    freshPage.unmount();
+    cleanupContainer(freshContainer);
+  });
 });

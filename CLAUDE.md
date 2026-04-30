@@ -19,8 +19,11 @@ npm test                   # watch mode
 
 # Build Windows .exe (onedir, outputs to dist/OpenLap/)
 pip install pyinstaller
+# ``pyinstaller OpenLap.spec`` (on Windows) auto-runs ``tools/fetch_ffmpeg.py --latest``
+# before bundling — downloads the current BtbN win64 GPL zip into third_party/ffmpeg/win64/bin/.
+# Offline / no network: ``set SKIP_FFMPEG_FETCH=1`` then place ffmpeg.exe / ffprobe.exe there (or PATH).
+# Manual fetch: ``python tools/fetch_ffmpeg.py`` (latest) or ``python tools/fetch_ffmpeg.py --stable`` (Gyan).
 pyinstaller OpenLap.spec --clean -y
-# ffmpeg.exe / ffprobe.exe must be on PATH or placed next to OpenLap.spec
 ```
 
 ## Architecture
@@ -73,6 +76,8 @@ Sync offsets are stored in three fields: `offsets` (csv_path → float), `offset
 ### Video export pipeline
 
 `export_runner.py` → `video_renderer.render_lap()` → multiprocessing pool of `overlay_worker.py` workers (one worker per frame). Workers call `style_registry.render_style()`. Requires `freeze_support()` on Windows (called in `main.py`).
+
+**FFmpeg CLI:** `ffmpeg_paths.py` resolves `ffmpeg` / `ffprobe` (staged under `third_party/ffmpeg/`, PyInstaller `_MEIPASS`, repo root exes, then PATH). `utils._run` / `_popen` rewrite bare `ffmpeg`/`ffprobe` argv0 so export, auto-sync, and ffprobe metadata use the same resolution without relying on a global install.
 
 ### Frontend structure
 

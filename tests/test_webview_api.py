@@ -93,6 +93,42 @@ class TestExportParamClamping:
         # what matters is workers/crf are valid when run_export is called with data.
         # The unit test above verifies the formula; this is an integration smoke test.
 
+    def test_run_export_bg_passes_encode_options_and_container(self, api, tmp_path):
+        """Shutter-style export controls must reach export_runner.run_export."""
+        received = {}
+
+        def fake_run_export(**kwargs):
+            received.update(kwargs)
+
+        csv_path = str(tmp_path / 'minimal.csv')
+        Path(csv_path).write_text(
+            'Date UTC,2026-04-26T12:00:00Z\nRecord,Time,Speed\n',
+            encoding='utf-8',
+        )
+        vid = str(tmp_path / 'clip.mp4')
+        Path(vid).write_bytes(b'\x00')
+
+        with patch('export_runner.run_export', side_effect=fake_run_export):
+            api._run_export_bg({
+                'items': [{'csv_path': csv_path, 'video_paths': [vid], 'sync_offset': 0.0}],
+                'scope': 'full',
+                'export_path': str(tmp_path),
+                'encoder': 'libx264',
+                'crf': 20,
+                'workers': 2,
+                'export_rate_mode': 'vbr',
+                'export_video_bitrate_kbps': 12000,
+                'export_container_choice': 'match_source',
+                'export_target_res': '1280x720',
+                'export_target_fps': '30',
+            })
+
+        assert received.get('encode_options', {}).get('export_rate_mode') == 'vbr'
+        assert received.get('encode_options', {}).get('export_video_bitrate_kbps') == 12000
+        assert received.get('encode_options', {}).get('export_target_res') == '1280x720'
+        assert received.get('encode_options', {}).get('export_target_fps') == '30'
+        assert received.get('container_choice') == 'match_source'
+
 
 # ── Thread safety ─────────────────────────────────────────────────────────────
 
@@ -181,6 +217,42 @@ def test_run_auto_sync_bg_invokes_all_sessions_with_parallel_workers(api, tmp_pa
     assert set(seen) == {s['csv_path'] for s in sessions}
 
 
+def test_get_video_probe_parses_ffprobe_json(api, tmp_path):
+    """get_video_probe returns stream geometry when ffprobe JSON is valid."""
+    vid = str(tmp_path / 'dummy.mkv')
+    Path(vid).write_bytes(b'\x00')
+    fake_json = {
+        'format': {'duration': '123.4', 'format_name': 'matroska,webm'},
+        'streams': [
+            {
+                'codec_type': 'video',
+                'width': 1280,
+                'height': 720,
+                'avg_frame_rate': '60000/1001',
+                'duration': '123.4',
+            },
+            {'codec_type': 'audio', 'codec_name': 'aac'},
+        ],
+    }
+    import json as _json
+    from types import SimpleNamespace
+
+    fake = SimpleNamespace(returncode=0, stdout=_json.dumps(fake_json), stderr='')
+    with patch('utils._run', return_value=fake):
+        out = api.get_video_probe(vid)
+    assert out['ok'] is True
+    assert out['width'] == 1280
+    assert out['height'] == 720
+    assert abs(out['fps'] - (60000 / 1001)) < 0.02
+    assert abs(out['duration'] - 123.4) < 0.1
+    assert out['has_audio'] is True
+    assert out['extension'] == '.mkv'
+
+
+def test_get_video_probe_missing_file(api):
+    assert api.get_video_probe('/no/such/file.mp4')['ok'] is False
+
+
 def test_load_preview_history_covers_session_tail(api):
     """Preview history extends from lap 0 start to session end; sess_rel is monotone."""
     csv = _FIXTURES / 'racebox_car.csv'
@@ -193,3 +265,40 @@ def test_load_preview_history_covers_session_tail(api):
     srs = [float(p['sess_rel']) for p in prev]
     assert srs == sorted(srs)
     assert srs[-1] >= srs[0]
+
+
+def test_resolve_export_encoder_positional(api):
+    avail = {'libx264': True, 'h264_nvenc': False}
+    with patch.object(api, '_export_encoder_probe_dict', return_value=avail):
+        r = api.resolve_export_encoder('h264', 'cpu')
+    assert r['ok'] is True
+    assert r['encoder'] == 'libx264'
+
+
+def test_resolve_export_encoder_single_dict_compat(api):
+    """Older JS passed one object; RPC must still work."""
+    avail = {'libx264': True, 'h264_nvenc': False}
+    with patch.object(api, '_export_encoder_probe_dict', return_value=avail):
+        r = api.resolve_export_encoder({'codec': 'h264', 'family': 'cpu'})
+    assert r['ok'] is True
+    assert r['encoder'] == 'libx264'
+
+
+def test_save_config_persists_export_timing_and_scope(api):
+    api.save_config({
+        'export_scope': 'all_laps',
+        'export_padding': 12.0,
+        'export_clip_start_s': 0.5,
+        'export_clip_end_s': 10.0,
+        'export_overlay_only': True,
+        'export_lap_range_start': 3,
+        'export_lap_range_end': None,
+    })
+    d = api.get_config()
+    assert d['export_scope'] == 'all_laps'
+    assert d['export_padding'] == pytest.approx(12.0)
+    assert d['export_clip_start_s'] == pytest.approx(0.5)
+    assert d['export_clip_end_s'] == pytest.approx(10.0)
+    assert d['export_overlay_only'] is True
+    assert d['export_lap_range_start'] == 3
+    assert d['export_lap_range_end'] is None
