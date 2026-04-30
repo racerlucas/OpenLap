@@ -119,7 +119,7 @@ def test_slice_telemetry_session_respects_bounds():
     assert np.isclose(t0, float(st[i0]))
 
 
-def test_probe_video_timecode_wall_like_uses_subseconds(monkeypatch):
+def test_probe_video_timecode_preferred_over_creation_even_when_far_apart(monkeypatch):
     import json as _json
     import subprocess as _sp
 
@@ -143,10 +143,65 @@ def test_probe_video_timecode_wall_like_uses_subseconds(monkeypatch):
     monkeypatch.setattr('auto_sync._probe_video', lambda _p: {'fps': 30.0})
 
     dt = _probe_video_creation_time_utc('dummy.mp4')
-    assert dt.isoformat() == '2026-04-25T09:15:19+00:00'
+    assert dt.isoformat() == '2026-04-25T17:15:19+00:00'
 
 
-def test_probe_video_timecode_non_wall_falls_back_to_creation_anchor(monkeypatch):
+def test_probe_video_timecode_applies_frame_subseconds(monkeypatch):
+    import json as _json
+    import subprocess as _sp
+
+    def fake_run(cmd, **kwargs):
+        c = ' '.join(cmd)
+        if '-select_streams' in cmd and 'v:0' in cmd and 'creation_time' in c:
+            payload = {
+                'format': {'tags': {'creation_time': '2026-04-25T09:15:19.000000Z'}},
+                'streams': [{'tags': {}}],
+            }
+            return _sp.CompletedProcess(cmd, 0, stdout=_json.dumps(payload), stderr='')
+        if '-show_streams' in cmd and 'stream_tags=timecode' in c:
+            payload = {'streams': [{'tags': {'timecode': '09:15:19:05'}}]}
+            return _sp.CompletedProcess(cmd, 0, stdout=_json.dumps(payload), stderr='')
+        if 'format_tags=timecode' in c and '-show_streams' not in c:
+            payload = {'format': {'tags': {}}}
+            return _sp.CompletedProcess(cmd, 0, stdout=_json.dumps(payload), stderr='')
+        raise AssertionError(f'unexpected cmd: {c}')
+
+    monkeypatch.setattr('auto_sync.subprocess.run', fake_run)
+    monkeypatch.setattr('auto_sync._probe_video', lambda _p: {'fps': 30.0})
+
+    dt = _probe_video_creation_time_utc('dummy.mp4')
+    assert dt == datetime(2026, 4, 25, 9, 15, 19, 166667, tzinfo=timezone.utc)
+
+
+def test_probe_video_timecode_drop_frame_separator_uses_wall_clock(monkeypatch):
+    """Semicolon before frame (07:56:13;17) must parse; SMPTE can trail creation_time by ~80s."""
+    import json as _json
+    import subprocess as _sp
+
+    def fake_run(cmd, **kwargs):
+        c = ' '.join(cmd)
+        if '-select_streams' in cmd and 'v:0' in cmd and 'creation_time' in c:
+            payload = {
+                'format': {'tags': {'creation_time': '2026-04-25T07:54:54.000000Z'}},
+                'streams': [{'tags': {}}],
+            }
+            return _sp.CompletedProcess(cmd, 0, stdout=_json.dumps(payload), stderr='')
+        if '-show_streams' in cmd and 'stream_tags=timecode' in c:
+            payload = {'streams': [{'tags': {'timecode': '07:56:13;17'}}]}
+            return _sp.CompletedProcess(cmd, 0, stdout=_json.dumps(payload), stderr='')
+        if 'format_tags=timecode' in c and '-show_streams' not in c:
+            payload = {'format': {'tags': {}}}
+            return _sp.CompletedProcess(cmd, 0, stdout=_json.dumps(payload), stderr='')
+        raise AssertionError(f'unexpected cmd: {c}')
+
+    monkeypatch.setattr('auto_sync.subprocess.run', fake_run)
+    monkeypatch.setattr('auto_sync._probe_video', lambda _p: {'fps': 30.0})
+
+    dt = _probe_video_creation_time_utc('dummy.mp4')
+    assert dt == datetime(2026, 4, 25, 7, 56, 13, 566667, tzinfo=timezone.utc)
+
+
+def test_probe_video_timecode_still_wins_when_creation_differs_by_minutes(monkeypatch):
     import json as _json
     import subprocess as _sp
 
@@ -170,4 +225,4 @@ def test_probe_video_timecode_non_wall_falls_back_to_creation_anchor(monkeypatch
     monkeypatch.setattr('auto_sync._probe_video', lambda _p: {'fps': 30.0})
 
     dt = _probe_video_creation_time_utc('dummy.mp4')
-    assert dt.isoformat() == '2026-04-25T09:15:19+00:00'
+    assert dt.isoformat() == '2026-04-25T10:00:00+00:00'

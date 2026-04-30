@@ -1043,11 +1043,10 @@ ${renderLapTagCard(s)}
       const t = (s && (s._temp_sync_offset ?? s.sync_offset));
       return Number.isFinite(Number(t)) ? Number(t) : 0;
     };
-    /** 已写入的同步偏移（auto/user）；换参考圈时用其预测各圈起点，避免 _temp 推算值盖住基线 */
+    /** 对齐 seek：优先拖条/预览的临时 offset，否则已保存值（与 sessionEffectiveOffset 一致） */
     const baselineOrActiveOffsetForSeek = () => {
-      if (s.sync_offset != null && Number.isFinite(Number(s.sync_offset)))
-        return Number(s.sync_offset);
-      return getActiveOffset();
+      const eff = sessionEffectiveOffset(s);
+      return eff != null && Number.isFinite(eff) ? eff : 0;
     };
     const setTempOffset = (val) => {
       const n = Number(val);
@@ -1194,7 +1193,8 @@ ${renderLapTagCard(s)}
         scrub.min = '0';
         scrub.max = String(maxFrame());
         scrub.step = '1';
-        scrub.value = String(curFrame);
+        // Do not fight the native range thumb while the user is dragging (WebView2 + timeupdate).
+        if (!scrubPointerHeld) scrub.value = String(curFrame);
       }
       const t = frameToTime(curFrame);
       if (timeEl) timeEl.textContent = fmtVTime(t);
@@ -1499,7 +1499,8 @@ ${renderLapTagCard(s)}
       });
       await decodeToFrameCpu(targetFrame, quiet, forceWT);
     }
-    async function decodeToFrameScrubCoalesced(targetFrame) {
+    async function decodeToFrameScrubCoalesced(targetFrame, opts = {}) {
+      const forceOpenCv = !!opts.forceOpenCv;
       scrubDecodeQueuedTarget = Number(targetFrame || 0);
       if (scrubDecodeBusy) return;
       scrubDecodeBusy = true;
@@ -1507,7 +1508,7 @@ ${renderLapTagCard(s)}
         while (scrubDecodeQueuedTarget != null) {
           const latest = scrubDecodeQueuedTarget;
           scrubDecodeQueuedTarget = null;
-          await decodeToFrame(latest, false, { forceWriteTemp: true });
+          await decodeToFrame(latest, false, { forceWriteTemp: true, forceOpenCv });
         }
       } finally {
         scrubDecodeBusy = false;
@@ -1823,8 +1824,9 @@ ${renderLapTagCard(s)}
     }
     pane._openlapApplyOffset = applyOffsetFromValue;
 
-    scrub?.addEventListener('pointerdown', (e) => {
-      try { scrub.setPointerCapture(e.pointerId); } catch (_) {}
+    // Never use setPointerCapture on <input type="range"> — it breaks native thumb dragging
+    // in pywebview / WebView2 (pointer moves no longer update the slider).
+    scrub?.addEventListener('pointerdown', () => {
       scrubPointerHeld = true;
       refreshSeekStepButtonsDisabled();
     });
@@ -1832,24 +1834,39 @@ ${renderLapTagCard(s)}
       if (!scrubPointerHeld) return;
       scrubPointerHeld = false;
       if (!syncSeekUiHeld) setSeekStepButtonsDisabled(false);
+      applyMeta();
     };
-    scrub?.addEventListener('pointerup', (e) => {
-      try { scrub.releasePointerCapture(e.pointerId); } catch (_) {}
-      _scrubPointerEnd();
-    });
+    scrub?.addEventListener('pointerup', _scrubPointerEnd);
     scrub?.addEventListener('pointercancel', _scrubPointerEnd);
-    scrub?.addEventListener('lostpointercapture', _scrubPointerEnd);
+    scrub?.addEventListener('change', _scrubPointerEnd);
 
     scrub?.addEventListener('input', async () => {
       stopBeforeSeek();
       const target = parseInt(scrub.value || '0', 10) || 0;
-      logSyncVideoUI('ui_scrub_input', { target, playing, liveMode, gpuReady, curFrame, video: _dbgVideoState(liveVideoEl) });
+      logSyncVideoUI('ui_scrub_input', { target, playing, liveMode, gpuReady, preciseMode, curFrame, video: _dbgVideoState(liveVideoEl) });
       try {
         const tReq = frameToTime(target);
         const t = clampVideoTimeSec(tReq);
         const nextFrame = Math.max(0, Math.min(maxFrame(), timeToFrame(t)));
         // Important: set temp offset first so applyMeta doesn't lock out auto-saved offsets.
         setTempOffset(frameToTime(nextFrame) - getRefLapElapsed());
+
+        // 精确模式：拖条必须走 OpenCV 逐帧（与 ±1f 一致），避免 WebView2 上 <video> currentTime 与进度条脱节或无法拖动感。
+        if (preciseMode && decoderSessionId) {
+          await decodeToFrameScrubCoalesced(nextFrame, { forceOpenCv: true });
+          dbgSyncVideo('scrub_precise_opencv', {
+            target,
+            tReq,
+            t,
+            nextFrame,
+            playing,
+            liveMode,
+            gpuReady,
+            curFrame,
+            video: _dbgVideoState(liveVideoEl),
+          });
+          return;
+        }
 
         if (gpuReady && liveVideoEl) {
           switchToLiveMode();
@@ -1992,8 +2009,8 @@ ${renderLapTagCard(s)}
       }
     });
     preciseModeEl?.addEventListener('change', async () => {
+      const enabled = !!preciseModeEl.checked;
       try {
-        const enabled = !!preciseModeEl.checked;
         const existing = _config?.session_info?.[s.csv_path] || {};
         await API.editSessionInfo(s.csv_path, { ...existing, sync_precise_mode: enabled });
         if (!_config.session_info) _config.session_info = {};
@@ -2001,9 +2018,10 @@ ${renderLapTagCard(s)}
         preciseMode = enabled;
         stopPlayback();
         setStatus(enabled ? '已开启精确模式：按帧/拖动优先走精确解码' : '已关闭精确模式：优先 GPU 流畅播放');
-        // Rebuild panel to rebind decoder/live path cleanly under new mode
-        renderRight();
+        // 勿 renderRight()：整卡重建会丢掉拖条临时 offset，且 WebView2 下重绑 range 易导致精确模式下拖不动。
       } catch (e) {
+        try { preciseModeEl.checked = !enabled; } catch (_) {}
+        preciseMode = !enabled;
         setStatus('切换精确模式失败：' + String(e));
       }
     });

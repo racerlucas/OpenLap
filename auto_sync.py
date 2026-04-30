@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 import threading
 from datetime import datetime, timezone, timedelta
@@ -28,6 +29,8 @@ from typing import Callable, List, Optional, Tuple
 
 import numpy as np
 from scipy import signal as sp_signal
+
+from utils import _popen, _run
 
 logger = logging.getLogger(__name__)
 
@@ -200,7 +203,7 @@ def _read_stderr_tail(proc: subprocess.Popen, max_bytes: int = 16_000) -> str:
 
 
 def _probe_video(vpath: str) -> dict:
-    result = subprocess.run(
+    result = _run(
         ['ffprobe', '-v', 'quiet', '-print_format', 'json',
          '-show_streams', '-select_streams', 'v:0', vpath],
         capture_output=True, text=True, check=True,
@@ -223,10 +226,10 @@ def _probe_video(vpath: str) -> dict:
 def _probe_video_creation_time_utc(vpath: str) -> Optional[datetime]:
     """Best-effort absolute start time for the video (UTC).
 
-    Many cameras only provide ``creation_time`` at second resolution, but also embed
-    an SMPTE timecode track with frame-accurate time-of-day. For sync baselines we
-    prefer the timecode-derived clock when available, using ``creation_time`` as the
-    calendar anchor.
+    ``creation_time`` supplies the calendar anchor; when any embedded SMPTE timecode
+    parses, we **prefer that time-of-day** (frame-accurate via fps) over the raw
+    creation timestamp — creation is often mux/rounding skew. ``creation_time`` still
+    picks among ±1 calendar day when the timecode wraps midnight relative to the anchor.
     """
     def _parse(raw: str) -> Optional[datetime]:
         txt = (raw or '').strip()
@@ -243,18 +246,18 @@ def _probe_video_creation_time_utc(vpath: str) -> Optional[datetime]:
 
     def _parse_timecode(tc: str) -> Optional[tuple[int, int, int, int]]:
         """
-        Parse SMPTE timecode 'HH:MM:SS:FF' -> (h,m,s,frames).
-        Does not attempt drop-frame semantics; best-effort only.
+        Parse SMPTE timecode 'HH:MM:SS:FF' or 'HH:MM:SS;FF' (drop-frame separator)
+        -> (h,m,s,frames). Does not attempt drop-frame arithmetic; best-effort only.
         """
         if not tc:
             return None
         txt = str(tc).strip()
-        parts = txt.split(':')
-        if len(parts) != 4:
+        m = re.match(r'^(\d{1,2}):(\d{1,2}):(\d{1,2})[:;](\d{1,2})$', txt)
+        if not m:
             return None
         try:
-            h, m, s, f = (int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3]))
-            return h, m, s, f
+            h, mm, s, f = (int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4)))
+            return h, mm, s, f
         except Exception:
             return None
 
@@ -302,7 +305,7 @@ def _probe_video_creation_time_utc(vpath: str) -> Optional[datetime]:
 
     try:
         # 1) creation_time anchor (often second-resolution)
-        result = subprocess.run(
+        result = _run(
             [
                 'ffprobe', '-v', 'quiet', '-print_format', 'json',
                 '-show_entries',
@@ -329,7 +332,7 @@ def _probe_video_creation_time_utc(vpath: str) -> Optional[datetime]:
             return None
 
         # 2) SMPTE timecode tokens may live on non-video streams; scan all streams.
-        result2 = subprocess.run(
+        result2 = _run(
             [
                 'ffprobe', '-v', 'quiet', '-print_format', 'json',
                 '-show_entries', 'stream_tags=timecode,com.apple.quicktime.timecode',
@@ -343,7 +346,7 @@ def _probe_video_creation_time_utc(vpath: str) -> Optional[datetime]:
         tc_tokens = _collect_timecode_tokens({'streams': data2.get('streams', []) or []})
 
         # Also include container-level tags (some muxers put timecode here).
-        result3 = subprocess.run(
+        result3 = _run(
             [
                 'ffprobe', '-v', 'quiet', '-print_format', 'json',
                 '-show_entries', 'format_tags=timecode,com.apple.quicktime.timecode',
@@ -368,27 +371,8 @@ def _probe_video_creation_time_utc(vpath: str) -> Optional[datetime]:
             if candidates:
                 best = min(candidates, key=lambda dt: abs((dt - anchor).total_seconds()))
                 delta = abs((best - anchor).total_seconds())
-                # Heuristic: treat SMPTE timecode as "wall clock" only when it agrees with the
-                # creation_time anchor within a small tolerance. Otherwise it may be a reset
-                # counter / authoring timecode unrelated to real-world clock — in that case
-                # falling back to creation_time avoids sub-second false precision.
-                wall_ok = delta <= 1.5
-                if wall_ok:
-                    logger.info(
-                        'auto_sync: video clock uses SMPTE timecode (wall-like) Δ=%.3fs vs creation anchor '
-                        '(video=%s tc=%r anchor=%s best=%s fps=%.3f)',
-                        delta,
-                        vpath,
-                        tc_tokens[0],
-                        anchor.isoformat(),
-                        best.isoformat(),
-                        fps,
-                    )
-                    return best
-
-                logger.warning(
-                    'auto_sync: SMPTE timecode does not match creation anchor (Δ=%.3fs) — '
-                    'treating timecode as non-wall-clock / unreliable; using creation_time anchor '
+                logger.info(
+                    'auto_sync: video clock from SMPTE (preferred over creation) Δ=%.3fs vs anchor '
                     '(video=%s tc=%r anchor=%s best=%s fps=%.3f)',
                     delta,
                     vpath,
@@ -397,6 +381,7 @@ def _probe_video_creation_time_utc(vpath: str) -> Optional[datetime]:
                     best.isoformat(),
                     fps,
                 )
+                return best
 
         return anchor
     except Exception as e:
@@ -411,7 +396,7 @@ def _probe_video_first_timecode_str(vpath: str) -> Optional[str]:
         tokens: list[str] = []
 
         # Container-level tags (some muxers put timecode here).
-        r3 = subprocess.run(
+        r3 = _run(
             [
                 'ffprobe', '-v', 'quiet', '-print_format', 'json',
                 '-show_entries', 'format_tags=timecode,com.apple.quicktime.timecode',
@@ -428,7 +413,7 @@ def _probe_video_first_timecode_str(vpath: str) -> Optional[str]:
                 tokens.append(str(v).strip())
 
         # Scan all streams (timecode track is often not the video stream).
-        r2 = subprocess.run(
+        r2 = _run(
             [
                 'ffprobe', '-v', 'quiet', '-print_format', 'json',
                 '-show_entries', 'stream_tags=timecode,com.apple.quicktime.timecode',
@@ -500,7 +485,7 @@ def _metadata_baseline_offset(
             # Therefore sync_offset = session_start - video_start.
             off = float((sess_start - vid_start).total_seconds())
             logger.info(
-                'auto_sync: metadata baseline=%.3fs (telemetry_t0_utc=%s video_tc0_utc=%s tc0=%r video=%s)',
+                'auto_sync: metadata baseline=%.3fs (telemetry_t0_utc=%s video_start_utc=%s tc0=%r video=%s)',
                 off,
                 sess_start.isoformat(),
                 vid_start.isoformat(),
@@ -629,7 +614,7 @@ def run_auto_sync(
                     if abs(snapped - off) > 1e-9:
                         tc0 = _probe_video_first_timecode_str(video_paths[0])
                         logger.info(
-                            'auto_sync: metadata-only snap fps=%.3f offset %.6f → %.6f (telemetry_t0_utc=%s video_tc0_utc=%s tc0=%r)',
+                            'auto_sync: metadata-only snap fps=%.3f offset %.6f → %.6f (telemetry_t0_utc=%s video_start_utc=%s tc0=%r)',
                             vid_fps,
                             off,
                             snapped,
@@ -834,9 +819,9 @@ def run_auto_sync(
             '-loglevel', 'error', 'pipe:1',
         ]
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE,
-                                    creationflags=_NO_WINDOW)
+            proc = _popen(cmd, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE,
+                          creationflags=_NO_WINDOW)
         except Exception as e:
             logger.warning('auto_sync: ffmpeg launch failed for %s: %s', vpath, e)
             continue
