@@ -2607,10 +2607,10 @@ ${renderLapTagCard(s)}
         <span class="dl-col dl-col-sync">Sync</span>
         <span class="dl-col dl-col-time">Time</span>
         <span class="dl-col dl-col-track">赛道</span>
-        <span class="dl-col dl-col-src">来源</span>
+        <span class="dl-col dl-col-src">数据来源</span>
         <span class="dl-col dl-col-num">圈数</span>
-        <span class="dl-col dl-col-num">最佳</span>
-        <span class="dl-col dl-col-num">视频</span>
+        <span class="dl-col dl-col-num">最佳单圈</span>
+        <span class="dl-col dl-col-num">视频时长</span>
       </div>
       <div class="dl-scroll" id="data-left"></div>
     </div>

@@ -57,6 +57,10 @@ class LapOutOfRangeError(VideoError):
     """The lap window falls outside the video duration."""
 
 
+class ExportCancelledError(VideoError):
+    """Export was cancelled by the user."""
+
+
 # ── Style / rendering errors ───────────────────────────────────────────────────
 
 class StyleError(OpenLapError):

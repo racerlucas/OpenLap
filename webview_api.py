@@ -2210,6 +2210,7 @@ class WebviewAPI:
                 lap_flags             = getattr(self._config, 'lap_flags', {}) or {},
                 encode_options        = eo,
                 container_choice      = cc,
+                cancel_event         = self._export_cancel,
             )
         except Exception as e:
             done_cb(False, str(e))

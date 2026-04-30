@@ -605,6 +605,7 @@ def render_lap(
     track_map_areas:    Optional[list] = None, # [{lats,lons}] OSM area polygons, or None
     encode_options:     Optional[dict] = None,
     container_choice:   str = 'match_source',
+    cancel_event=None,
 ) -> None:
     """
     Render one video with telemetry overlay.
@@ -619,6 +620,21 @@ def render_lap(
         if log_cb: log_cb(msg)
     def prog(pct, msg):
         if progress_cb: progress_cb(pct, msg)
+
+    from exceptions import ExportCancelledError
+
+    def _cancelled() -> bool:
+        try:
+            return cancel_event is not None and cancel_event.is_set()
+        except Exception:
+            return False
+
+    def _safe_remove(p: str) -> None:
+        try:
+            if p and os.path.exists(p):
+                os.remove(p)
+        except Exception:
+            pass
 
     # ── Delta time setup ───────────────────────────────────────────────────────
     dt_state = _setup_delta_time(reference_lap, job, session)
@@ -772,8 +788,12 @@ def render_lap(
     processed = 0
 
     pool = Pool(n_workers) if n_workers > 1 else None
+    cancelled = False
     try:
         while frame_idx < f_end:
+            if _cancelled():
+                cancelled = True
+                raise ExportCancelledError('cancelled')
             chunk_frames, chunk_meta = [], []
 
             for _ in range(chunk):
@@ -917,6 +937,19 @@ def render_lap(
         if pool:
             pool.terminate()
             pool.join()
+        if cancelled:
+            try:
+                if overlay_only:
+                    try:
+                        _ov_queue.put(None)
+                    except Exception:
+                        pass
+                    try:
+                        _ov_proc.kill()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
     if overlay_only:
         cap.release()
@@ -927,6 +960,9 @@ def render_lap(
             err = b''.join(_ov_stderr).decode(errors='replace')
             logger.error('FFmpeg ProRes export failed:\n%s', err)
             raise VideoMuxError(err[-600:])
+        if _cancelled():
+            _safe_remove(out_path)
+            raise ExportCancelledError('cancelled')
         prog(100, "")
         log(f"  ✓ Saved: {out_path}")
     else:
@@ -937,6 +973,9 @@ def render_lap(
         log("  Muxing audio…")
         mux_dur_s = n_frames / fps if fps else 0.0
         try:
+            if _cancelled():
+                cancelled = True
+                raise ExportCancelledError('cancelled')
             eo_mux = dict(encode_options) if isinstance(encode_options, dict) else {}
             eo_mux['_export_mux_vw'] = vw
             eo_mux['_export_mux_vh'] = vh
@@ -948,10 +987,18 @@ def render_lap(
                       progress_cb=progress_cb,
                       creation_time_utc=utc_first,
                       encode_options=eo_mux)
-            os.remove(tmp_raw)
+            _safe_remove(tmp_raw)
+            if _cancelled():
+                _safe_remove(out_path)
+                raise ExportCancelledError('cancelled')
             prog(100, "")
             log(f"  ✓ Saved: {out_path}")
         except Exception as e:
+            if isinstance(e, ExportCancelledError) or _cancelled():
+                cancelled = True
+                _safe_remove(tmp_raw)
+                _safe_remove(out_path)
+                raise ExportCancelledError('cancelled')
             log(f"  ✗ Mux failed: {e}")
             fallback = os.path.splitext(out_path)[0] + '_raw.avi'
             if os.path.exists(tmp_raw):

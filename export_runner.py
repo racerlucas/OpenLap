@@ -94,6 +94,7 @@ def run_export(
     lap_flags: dict = None,
     encode_options: Optional[dict] = None,
     container_choice: str = 'match_source',
+    cancel_event=None,
 ) -> None:
     """Render one or more sessions.  Designed to be called from a background thread."""
     from export_codec import resolve_export_container_extension
@@ -102,6 +103,7 @@ def run_export(
     from utils import compute_lean_angle
     from reference_resolver import resolve_reference_lap
     from app_config import load_scan_cache
+    from exceptions import ExportCancelledError
 
     scan_cache = load_scan_cache()
 
@@ -149,6 +151,9 @@ def run_export(
     _cc = str(container_choice or 'match_source').strip() or 'match_source'
 
     for item in items:
+        if cancel_event is not None and getattr(cancel_event, 'is_set', lambda: False)():
+            done_cb(False, '已取消。')
+            return
         # Accept both the webview field names (csv_path / video_paths / sync_offset)
         # and the legacy Tkinter names (csv / videos / offset).
         csv_path = item.get('csv_path') or item.get('csv')
@@ -327,6 +332,7 @@ def run_export(
                     track_map_areas=_track_map_areas,
                     encode_options=_enc_opts,
                     container_choice=_cc,
+                    cancel_event=cancel_event,
                 )
 
             elif item_scope == 'fastest':
@@ -351,6 +357,7 @@ def run_export(
                     track_map_areas=_track_map_areas,
                     encode_options=_enc_opts,
                     container_choice=_cc,
+                    cancel_event=cancel_event,
                 )
 
             elif item_scope == 'all_laps':
@@ -377,6 +384,7 @@ def run_export(
                         track_map_areas=_track_map_areas,
                         encode_options=_enc_opts,
                         container_choice=_cc,
+                        cancel_event=cancel_event,
                     )
 
             elif item_scope == 'lap_range':
@@ -423,6 +431,7 @@ def run_export(
                     track_map_areas=_track_map_areas,
                     encode_options=_enc_opts,
                     container_choice=_cc,
+                    cancel_event=cancel_event,
                 )
 
             elif item_scope == 'full':
@@ -442,6 +451,7 @@ def run_export(
                     track_map_areas=_track_map_areas,
                     encode_options=_enc_opts,
                     container_choice=_cc,
+                    cancel_event=cancel_event,
                 )
 
             elif item_scope == 'clip':
@@ -479,8 +489,13 @@ def run_export(
                     track_map_areas=_track_map_areas,
                     encode_options=_enc_opts,
                     container_choice=_cc,
+                    cancel_event=cancel_event,
                 )
 
+        except ExportCancelledError:
+            log("  ⏹ Cancelled.")
+            done_cb(False, "已取消。")
+            return
         except Exception as e:
             log(f"  ✗ Render error: {e}")
             errors.append(str(e))
