@@ -333,6 +333,9 @@
     const track   = trackOverride || m.track || baseName(s.csv_path);
     const lapStr  = m.laps  || '—';
     const bestStr = m.best  || (m.best_secs != null ? fmtTime(m.best_secs) : '—');
+    const vidStr  = (m.video_dur_s != null && Number.isFinite(Number(m.video_dur_s)) && Number(m.video_dur_s) > 0)
+      ? fmtTime(Number(m.video_dur_s))
+      : (s.matched ? '—' : '');
     const syncLabel = s.needs_conversion           ? '↻ conv'
                     : (!s.matched)                  ? 'no vid'
                     : s.sync_offset != null && syncIsAutoFamily(s.sync_source) ? '~自动'
@@ -354,6 +357,7 @@
       <span class="dl-source">${esc(s.source||'RaceBox')}</span>
       <span class="dl-num">${esc(lapStr)}</span>
       <span class="dl-num">${esc(bestStr)}</span>
+      <span class="dl-num" title="视频时长（探测自第 1 段）">${esc(vidStr)}</span>
     </div>`;
   }
 
@@ -1047,6 +1051,10 @@ ${renderLapTagCard(s)}
     const setTempOffset = (val) => {
       const n = Number(val);
       if (!Number.isFinite(n)) return;
+      // Avoid poisoning the session with a bogus temp offset when the video
+      // timeline is not ready yet (no GPU readiness + no decode session/frame_count).
+      // In that state curFrame often stays 0, so derived offsets collapse to -refElapsed.
+      if (!gpuReady && !decoderSessionId && !(frameCount > 0)) return;
       s._temp_sync_offset = n;
       // Keep previewSession offset in sync (preview only; not persisted until mark).
       const prev = State.get('previewSession');
@@ -1088,7 +1096,12 @@ ${renderLapTagCard(s)}
     }
     /** Clamp telemetry-derived video time to file bounds [0, duration]. */
     function clampVideoTimeSec(tSec) {
-      return Math.max(0, Math.min(videoDurationSec(), Number(tSec) || 0));
+      const t = Number(tSec) || 0;
+      const d = videoDurationSec();
+      // If duration is unknown (0), only clamp to >=0 so offset math can proceed
+      // without collapsing everything to 0s.
+      if (!(d > 0.25)) return Math.max(0, t);
+      return Math.max(0, Math.min(d, t));
     }
     /**
      * When showing JPEG preview (liveMode off), keep the hidden <video> seeked to curFrame
@@ -2007,6 +2020,13 @@ ${renderLapTagCard(s)}
 
     pane.querySelector('#sv-mark')?.addEventListener('click', async () => {
       stopPlayback();
+      // Guard: if we don't have a real timeline yet, curFrame is often stuck at 0,
+      // which would "save" a bogus offset of (-refElapsed) and permanently desync preview/export.
+      if (!gpuReady && !decoderSessionId && !(frameCount > 0)) {
+        setLoading(true, '视频未就绪：请先等待画面可拖动/可播放后再标记。');
+        setTimeout(() => { try { setLoading(false); } catch (_) {} }, 1200);
+        return;
+      }
       const rawTime = frameToTime(curFrame);
       // Confirm should lock against the currently selected reference lap.
       // Using lap-1 baseline for auto results can flip sign/magnitude unexpectedly.
@@ -2110,6 +2130,16 @@ ${renderLapTagCard(s)}
           _meta[s.csv_path] = m;
           // Write track back into the session object so it persists in the cache
           if (m.track) s.track = m.track;
+          // Video duration (first segment) — used in session list column
+          try {
+            const cur = _meta[s.csv_path] || {};
+            if (cur.video_dur_s == null && s.video_paths && s.video_paths[0]) {
+              const p = await API.getVideoProbe(s.video_paths[0]).catch(() => null);
+              if (p?.ok && Number.isFinite(Number(p.duration)) && Number(p.duration) > 0) {
+                _meta[s.csv_path] = { ...cur, video_dur_s: Number(p.duration) };
+              }
+            }
+          } catch (_) { /* ignore */ }
           // Refresh sync fields from config if they changed since last scan
           _applyStoredSyncToSession(s);
         } catch (err) {
@@ -2580,6 +2610,7 @@ ${renderLapTagCard(s)}
         <span class="dl-col dl-col-src">来源</span>
         <span class="dl-col dl-col-num">圈数</span>
         <span class="dl-col dl-col-num">最佳</span>
+        <span class="dl-col dl-col-num">视频</span>
       </div>
       <div class="dl-scroll" id="data-left"></div>
     </div>
