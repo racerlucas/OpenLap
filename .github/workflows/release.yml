@@ -6,10 +6,15 @@ on:
       - 'v*'
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
 
     steps:
       - name: Checkout
@@ -20,33 +25,35 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install Python dependencies
+      - name: Install Python deps
         run: |
-          pip install --upgrade pip
-          pip install pywebview opencv-python pillow numpy pandas matplotlib
-          pip install playwright pyinstaller
-        shell: pwsh
+          python -m pip install -U pip setuptools wheel
+          python -m pip install -e ".[package,racebox-download]"
+          python -m pip install pyinstaller
 
-      - name: Install ffmpeg
+      - name: Build (Windows portable)
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          choco install ffmpeg -y --no-progress
-          # Copy binaries next to spec so PyInstaller can bundle them
-          $ffmpeg  = (Get-Command ffmpeg).Source
-          $ffprobe = (Get-Command ffprobe).Source
-          Copy-Item $ffmpeg  -Destination "${{ github.workspace }}\ffmpeg.exe"
-          Copy-Item $ffprobe -Destination "${{ github.workspace }}\ffprobe.exe"
-        shell: pwsh
+          python tools/build_windows_portable.py
+          $zip = "OpenLap-${{ github.ref_name }}-windows.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path "dist/OpenLap" -DestinationPath $zip
+          "ZIP_NAME=$zip" >> $env:GITHUB_ENV
 
-      - name: Build exe
-        run: pyinstaller OpenLap.spec --clean -y
-        shell: pwsh
+      - name: Build (macOS .app)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          python -m PyInstaller OpenLap.spec --clean -y
+          ZIP="OpenLap-${{ github.ref_name }}-macos.zip"
+          rm -f "$ZIP"
+          # Keep parent dir so users get OpenLap.app at top-level when unzipped
+          ditto -c -k --sequesterRsrc --keepParent "dist/OpenLap.app" "$ZIP"
+          echo "ZIP_NAME=$ZIP" >> "$GITHUB_ENV"
 
-      - name: Zip release
-        run: Compress-Archive -Path dist\OpenLap\* -DestinationPath OpenLap-${{ github.ref_name }}-windows.zip
-        shell: pwsh
-
-      - name: Create GitHub Release
+      - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: OpenLap-${{ github.ref_name }}-windows.zip
+          files: ${{ env.ZIP_NAME }}
           generate_release_notes: true

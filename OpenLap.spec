@@ -203,15 +203,15 @@ coll = COLLECT(
     name='OpenLap',
 )
 
-# ── macOS .app bundle (no-op on Windows) ─────────────────────────────────────
-# Uncomment on macOS:
-# app = BUNDLE(
-#     coll,
-#     name='OpenLap.app',
-#     icon=None,
-#     bundle_identifier='com.openlap.app',
-#     info_plist={
-#         'NSHighResolutionCapable': True,
-#         'CFBundleShortVersionString': '0.1.0',
-#     },
-# )
+# ── macOS .app bundle ───────────────────────────────────────────────────────
+# On macOS we ship an .app (zip it for Releases).
+if sys.platform == 'darwin':
+    app = BUNDLE(
+        coll,
+        name='OpenLap.app',
+        icon=None,  # No .icns in repo yet; keep default to avoid build failures
+        bundle_identifier='com.openlap.app',
+        info_plist={
+            'NSHighResolutionCapable': True,
+        },
+    )

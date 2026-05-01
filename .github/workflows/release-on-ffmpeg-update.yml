@@ -142,12 +142,24 @@ jobs:
           $sha = git rev-parse HEAD
           "sha=$sha" >> $env:GITHUB_OUTPUT
 
+      - name: Create and push git tag (v<version>)
+        if: steps.gate.outputs.build == 'true'
+        id: tag
+        shell: pwsh
+        run: |
+          $v = "${{ steps.bump.outputs.new_version }}"
+          $tag = "v$v"
+          $sha = "${{ steps.gitpush.outputs.sha }}"
+          git tag $tag $sha
+          git push origin $tag
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
       - name: Tag and create GitHub Release
         if: steps.gate.outputs.build == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.bump.outputs.new_version }}
-          name: OpenLap v${{ steps.bump.outputs.new_version }}
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: OpenLap ${{ steps.tag.outputs.tag }}
           target_commitish: ${{ steps.gitpush.outputs.sha }}
           body: |
             ffmpeg更新到 ${{ steps.ident.outputs.asset }}（${{ steps.ffver.outputs.line }}）
