@@ -158,6 +158,11 @@ def run_export(
         # and the legacy Tkinter names (csv / videos / offset).
         csv_path = item.get('csv_path') or item.get('csv')
         videos   = item.get('video_paths') or item.get('videos') or []
+        videos   = [v for v in videos if v and isinstance(v, str)]
+        if len(videos) > 1:
+            from session_scanner import sort_video_paths_by_start_time
+
+            videos = sort_video_paths_by_start_time(list(videos))
         offset   = item.get('sync_offset') if item.get('sync_offset') is not None \
                    else (item.get('offset') or 0.0)
 
@@ -453,6 +458,39 @@ def run_export(
                     track_map_areas=_track_map_areas,
                     encode_options=_enc_opts,
                     container_choice=_cc,
+                    cancel_event=cancel_event,
+                )
+
+            elif item_scope == 'all_laps_data_end':
+                # Single output: from video start (0s) to telemetry end (mapped into video time via sync offset).
+                pts = sess.all_points
+                if not pts:
+                    log("  ✗ No data points found")
+                    done_jobs += 1
+                    continue
+                try:
+                    sess_end = float(pts[-1].elapsed)
+                except Exception:
+                    sess_end = 0.0
+                vid_end = max(0.0, float(offset or 0.0) + max(0.0, sess_end))
+                out = os.path.join(export_dir, f'_openlap_export_pending{_ext}')
+                log(f"  All laps (single): video 0s → data end ({sess_end:.1f}s session → {vid_end:.1f}s video)")
+                render_lap(
+                    video_path or '', out, sess, RenderJob(_export_stem(sess, 'AllLaps'), None),
+                    sync_offset=offset, encoder=encoder, crf=crf,
+                    n_workers=workers, show_map=show_map,
+                    show_telemetry=show_tel, padding=0.0,
+                    is_bike=is_bike, overlay_layout=layout,
+                    progress_cb=scaled_prog, log_cb=log,
+                    reference_lap=static_ref_lap,
+                    info_overrides=info_overrides,
+                    overlay_only=overlay_only,
+                    track_map_geometry=_track_map_geometry,
+                    track_map_areas=_track_map_areas,
+                    encode_options=_enc_opts,
+                    container_choice=_cc,
+                    force_vid_start_s=0.0,
+                    force_vid_end_s=vid_end,
                     cancel_event=cancel_event,
                 )
 

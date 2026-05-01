@@ -343,8 +343,10 @@
       : '—';
     const trackOverride = _config?.session_info?.[s.csv_path]?.info_track;
     const track   = trackOverride || m.track || baseName(s.csv_path);
-    const lapStr  = m.laps  || '—';
-    const bestStr = m.best  || (m.best_secs != null ? fmtTime(m.best_secs) : '—');
+    const lapStr  = m.laps || s.laps || '—';
+    const bestStr = m.best || (m.best_secs != null && Number.isFinite(Number(m.best_secs))
+      ? fmtTime(Number(m.best_secs))
+      : (s.best || '—'));
     const vidStr  = (m.video_dur_s != null && Number.isFinite(Number(m.video_dur_s)) && Number(m.video_dur_s) > 0)
       ? fmtTime(Number(m.video_dur_s))
       : (s.matched ? '—' : '');
@@ -420,6 +422,11 @@
     const hasVid      = s.matched && vidPaths.length > 0;
     const trackOverride  = _config?.session_info?.[s.csv_path]?.info_track;
     const effectiveTrack = trackOverride || m.track || '';
+    const detailLaps = m.laps || s.laps || '—';
+    const detailBest = m.best
+      || (m.best_secs != null && Number.isFinite(Number(m.best_secs)) ? fmtTime(Number(m.best_secs)) : '')
+      || s.best
+      || '—';
 
     pane.innerHTML = `
 <!-- Info card -->
@@ -435,8 +442,8 @@
       </span>
     </div>
     <div class="dr-row"><span class="dr-lbl">日期</span><span class="dr-val">${esc(fmtDateTime(s.csv_start))}</span></div>
-    <div class="dr-row"><span class="dr-lbl">圈数</span><span class="dr-val">${esc(m.laps||'—')}</span></div>
-    <div class="dr-row"><span class="dr-lbl">最佳</span><span class="dr-val" style="color:var(--ok)">${esc(m.best||'—')}</span></div>
+    <div class="dr-row"><span class="dr-lbl">圈数</span><span class="dr-val">${esc(detailLaps)}</span></div>
+    <div class="dr-row"><span class="dr-lbl">最佳</span><span class="dr-val" style="color:var(--ok)">${esc(detailBest)}</span></div>
     <div class="dr-row"><span class="dr-lbl">视频</span><span class="dr-val ${hasVid?'':'dr-warn'}">${hasVid ? `✓ ${vidPaths.length} 段` : '✗ 未匹配'}</span></div>
     <div class="dr-row">
       <span class="dr-lbl">偏移</span>
@@ -474,7 +481,7 @@ ${hasVid ? renderAlignCard(s, vidPaths, effOff) : `
   <div class="dr-card-title">视频</div>
   <div class="dr-hint" style="color:var(--warn)">未找到匹配视频。</div>
   <div class="dr-actions" style="margin-top:8px">
-    <button class="btn btn-secondary btn-sm" id="dr-assign-vid-btn">选择视频…</button>
+    <button class="btn btn-secondary btn-sm" id="dr-assign-vid-btn">选择视频（可多选）…</button>
     <span id="dr-assign-vid-msg" class="status-msg"></span>
   </div>
 </div>`}
@@ -835,17 +842,26 @@ ${renderLapTagCard(s)}
       }
     });
 
-    // Manual video assignment
+    // Manual video assignment (one or more clips; backend orders by recording time for export)
     pane.querySelector('#dr-assign-vid-btn')?.addEventListener('click', async () => {
       const btn = pane.querySelector('#dr-assign-vid-btn');
       const msg = pane.querySelector('#dr-assign-vid-msg');
       btn.disabled = true;
-      const videoPath = await API.openFileDialog(['视频文件 (*.mp4;*.mov;*.avi;*.mkv;*.MP4;*.MOV)']).catch(() => null);
-      if (!videoPath) { btn.disabled = false; return; }
+      const filter = ['视频文件 (*.mp4;*.mov;*.avi;*.mkv;*.MP4;*.MOV)'];
+      let paths = await API.openFilesDialog(filter).catch(() => []);
+      if (!paths || !paths.length) {
+        const one = await API.openFileDialog(filter).catch(() => null);
+        paths = one ? [one] : [];
+      }
+      if (!paths.length) { btn.disabled = false; return; }
       try {
-        await API.assignVideo(s.csv_path, videoPath);
-        s.video_paths = [videoPath];
+        const res = await API.assignVideos(s.csv_path, paths);
+        s.video_paths = (res && Array.isArray(res.video_paths)) ? res.video_paths : paths;
         s.matched     = true;
+        if (msg && res?.warnings?.length) {
+          msg.textContent = res.warnings.join(' ');
+          msg.className = 'status-msg status-dim';
+        }
         // Update previewSession so editor picks up the new video immediately
         const prev = State.get('previewSession');
         if (prev?.csv_path === s.csv_path) {
@@ -2291,6 +2307,7 @@ ${renderLapTagCard(s)}
       }));
       recomputeDayBest();
       renderLeft();
+      if (_selCsv) renderRight();
     }
     _metaBusy = false;
     // Persist enriched track names to cache so backend queries (ref picker,

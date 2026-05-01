@@ -2542,7 +2542,8 @@
                   style="font-size:10px;flex-shrink:0;min-width:90px;">
             <option value="selected_lap">当前圈</option>
             <option value="fastest">最快圈</option>
-            <option value="all_laps">全部圈</option>
+            <option value="all_laps">全部圈（每圈一个文件）</option>
+            <option value="all_laps_data_end">全部圈（单文件：从视频开头到数据结尾）</option>
             <option value="full">完整节</option>
           </select>
           <button class="btn btn-sm" id="stage-export-btn"

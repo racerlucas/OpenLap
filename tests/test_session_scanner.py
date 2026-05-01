@@ -9,6 +9,7 @@ from session_scanner import (
     _read_csv_start_time, _csv_source,
     match_sessions, MatchedSession,
     MAX_GAP, MATCH_WINDOW,
+    sort_video_paths_by_start_time,
 )
 from pathlib import Path
 
@@ -191,8 +192,55 @@ def test_match_sessions_no_videos(racebox_car_csv_path):
     assert results[0].video_group is None
 
 
+def test_match_sessions_overlap_prefers_larger_intersection(tmp_path):
+    """When two video groups overlap the CSV window, pick the one with longer overlap."""
+    csv = tmp_path / 'session.csv'
+    csv.write_text(
+        '\n'.join([
+            'Data Source,RaceBox Mini',
+            'Date UTC,2024-01-01T12:00:00Z',
+            'Record,Time,Latitude,Longitude,Altitude,Speed,GForceX,GForceY,GForceZ,Lap,GyroX,GyroY,GyroZ',
+            '1,2024-01-01T12:00:00Z,0,0,0,0,0,0,1,0,0,0,0',
+            '2,2024-01-01T12:05:00Z,0,0,0,0,0,0,1,0,0,0,0',
+        ]),
+        encoding='utf-8',
+    )
+    # Group A: only first minute overlaps [12:00, 12:05]
+    t0 = _utc(2024, 1, 1, 11, 59, 0)
+    g_a = _make_group([_make_video(str(tmp_path / 'a.mp4'), t0, 120.0)])
+    # Group B: spans entire session window
+    t1 = _utc(2024, 1, 1, 12, 0, 0)
+    g_b = _make_group([_make_video(str(tmp_path / 'b.mp4'), t1, 600.0)])
+
+    results = match_sessions([str(csv)], [g_a, g_b])
+    assert len(results) == 1
+    assert results[0].matched is True
+    assert results[0].video_group is g_b
+
+
 def test_match_sessions_sorts_by_csv_start(racebox_car_csv_path, racebox_bike_csv_path):
     # Bike CSV starts at 11:00, car CSV at 10:00 — result should be car first
     results = match_sessions([racebox_bike_csv_path, racebox_car_csv_path], [])
     starts = [r.csv_start for r in results if r.csv_start]
     assert starts == sorted(starts)
+
+
+def test_sort_video_paths_by_start_time_orders_by_probe(monkeypatch, tmp_path):
+    a = str((tmp_path / 'a.mp4').resolve())
+    b = str((tmp_path / 'b.mp4').resolve())
+    Path(a).write_bytes(b'0')
+    Path(b).write_bytes(b'0')
+
+    def fake_probe(path: str):
+        if path == a:
+            return _utc(2024, 6, 2, 12, 0, 0), 10.0
+        return _utc(2024, 6, 2, 11, 0, 0), 10.0
+
+    monkeypatch.setattr('session_scanner._ffprobe_creation_time', fake_probe)
+    assert sort_video_paths_by_start_time([a, b]) == [b, a]
+
+
+def test_sort_video_paths_single_unchanged(tmp_path):
+    p = str((tmp_path / 'only.mp4').resolve())
+    Path(p).write_bytes(b'0')
+    assert sort_video_paths_by_start_time([p]) == [p]

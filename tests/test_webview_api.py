@@ -170,6 +170,46 @@ class TestThreadSafety:
         assert isinstance(api._thread_lock, type(_t.Lock()))
 
 
+def test_assign_videos_stores_sorted_paths(api, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        'video_clip_order.sort_video_paths_with_timecode',
+        lambda ps: ([ps[1], ps[0]] if len(ps) == 2 else list(ps), []),
+    )
+    a = str((tmp_path / 'a.mp4').resolve())
+    b = str((tmp_path / 'b.mp4').resolve())
+    Path(a).write_bytes(b'0')
+    Path(b).write_bytes(b'0')
+    c = str((tmp_path / 's.csv').resolve())
+    Path(c).write_text('x', encoding='utf-8')
+    api.assign_videos(c, [a, b])
+    abs_c = str(Path(c).resolve())
+    assert api._config.session_info[abs_c]['_video_paths'] == [b, a]
+    assert '_video_override' not in api._config.session_info[abs_c]
+
+
+def test_cached_sessions_prefers_manual_video_paths_list(api, tmp_path):
+    csv_path = str((tmp_path / 's.csv').resolve())
+    v1 = str((tmp_path / 'm1.mp4').resolve())
+    v2 = str((tmp_path / 'm2.mp4').resolve())
+    Path(csv_path).write_text("Date UTC,2026-04-26T12:00:00Z\nRecord,Time,Speed\n", encoding='utf-8')
+    Path(v1).write_bytes(b'\x00')
+    Path(v2).write_bytes(b'\x00')
+    api._config.session_info[str(Path(csv_path).resolve())] = {
+        '_video_paths': [str(Path(v1).resolve()), str(Path(v2).resolve())],
+    }
+    fake_cache = {'sessions': [{
+        'csv_path': csv_path,
+        'source': 'RaceBox',
+        'matched': False,
+        'video_paths': [],
+    }]}
+    with patch('webview_api.load_scan_cache', return_value=fake_cache):
+        out = api._cached_sessions()
+    assert len(out) == 1
+    assert out[0]['matched'] is True
+    assert out[0]['video_paths'] == [str(Path(v1).resolve()), str(Path(v2).resolve())]
+
+
 def test_cached_sessions_prefers_manual_video_override(api, tmp_path):
     csv_path = str((tmp_path / "s.csv").resolve())
     video_path = str((tmp_path / "manual.mp4").resolve())

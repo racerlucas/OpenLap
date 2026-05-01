@@ -213,13 +213,16 @@ def _probe_video(vpath: str) -> dict:
     num, den = map(int, stream['r_frame_rate'].split('/'))
     fps = num / den
     duration = float(stream.get('duration') or 0)
+    nb_frames = int(stream.get('nb_frames') or 0)
     if duration == 0:
-        duration = int(stream.get('nb_frames', 0)) / fps
+        duration = (nb_frames / fps) if (fps > 0 and nb_frames > 0) else 0.0
     return {
         'fps': fps,
         'width':  int(stream['width']),
         'height': int(stream['height']),
         'duration': duration,
+        'nb_frames': nb_frames,
+        'avg_frame_rate': stream.get('avg_frame_rate') or stream.get('r_frame_rate'),
     }
 
 

@@ -6,14 +6,18 @@ and video files, matches them by timestamp proximity, and persists
 processing state so runs can be resumed after interruption.
 
 Matching strategy:
-  1. Parse session start time from CSV metadata (Date UTC field).
-  2. Extract video creation time from:
+  1. Parse session start time from CSV metadata (Date UTC field, etc.).
+  2. Parse session **end** time from CSV tail when possible (last sample timestamp
+     or AIM ``Time (s)`` span) so the telemetry interval ``[start, end]`` is known.
+  3. Extract video creation time from:
      a. ffprobe QuickTime creation_time metadata  (most accurate)
      b. File modification time                    (fallback)
-  3. Group video segments that start within MAX_GAP seconds of each other
+  4. Group video segments that start within MAX_GAP seconds of each other
      into one "video group" — these belong to the same recording session.
-  4. Match each CSV session to the video group whose start time is closest,
-     within MATCH_WINDOW seconds.
+  5. Match each CSV to a video group whose **wall-clock interval overlaps**
+     ``[csv_start, csv_end]`` with ``[group.start_time, group.end_time]``; pick the
+     largest overlap. If nothing overlaps, fall back to **closest group start**
+     within ``MATCH_WINDOW`` seconds (legacy behaviour).
 """
 
 from __future__ import annotations
@@ -100,6 +104,38 @@ def _ffprobe_creation_time(path: str) -> Optional[datetime]:
     except Exception:
         logger.debug('ffprobe failed for %s', path, exc_info=True)
         return None, 0.0
+
+
+def _sort_video_paths_by_metadata_only(paths: List[str]) -> List[str]:
+    """Sort by ``creation_time`` / mtime−duration (same heuristics as ``scan_videos``)."""
+    if len(paths) <= 1:
+        return list(paths)
+
+    def start_ts(path: str) -> float:
+        got = _ffprobe_creation_time(path)
+        if isinstance(got, tuple):
+            dt, dur = got[0], float(got[1] or 0.0)
+        else:
+            dt, dur = None, 0.0
+        if dt is not None:
+            return dt.timestamp()
+        mtime = os.path.getmtime(path)
+        ct = datetime.fromtimestamp(mtime, tz=timezone.utc)
+        if dur and dur > 0:
+            ct = ct - timedelta(seconds=dur)
+        return ct.timestamp()
+
+    return sorted(paths, key=start_ts)
+
+
+def sort_video_paths_by_start_time(paths: List[str]) -> List[str]:
+    """Sort clips: prefer SMPTE timecode + frame continuity; else metadata (see ``video_clip_order``)."""
+    from video_clip_order import sort_video_paths_with_timecode
+
+    ordered, warnings = sort_video_paths_with_timecode(paths)
+    for w in warnings:
+        logger.info('video_clip_order: %s', w)
+    return ordered
 
 
 def scan_videos(folder: str, progress_cb: Optional[Callable[[str], None]] = None) -> List[VideoFile]:
@@ -364,37 +400,162 @@ def _csv_source(path: str) -> str:
     return 'RaceBox'
 
 
+def _tail_file_text(path: str, max_bytes: int = 262_144) -> str:
+    """Read up to *max_bytes* from the end of a text file (UTF-8 with BOM tolerance)."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, 'rb') as f:
+            if size <= max_bytes:
+                raw = f.read().decode('utf-8-sig', errors='ignore')
+            else:
+                f.seek(max(0, size - max_bytes))
+                raw = f.read().decode('utf-8-sig', errors='ignore')
+                if '\n' in raw:
+                    raw = raw.split('\n', 1)[1]
+            return raw
+    except OSError:
+        return ''
+
+
+def _read_csv_session_end(path: str, csv_start: Optional[datetime]) -> Optional[datetime]:
+    """Best-effort session end (UTC) from file tail. ``csv_start`` required for AIM / elapsed CSV."""
+    if not csv_start:
+        return None
+    suf = Path(path).suffix.lower()
+    if suf == '.gpx':
+        import re as _re
+        tail = _tail_file_text(path, 512_000)
+        times = _re.findall(r'<time>([^<]+)</time>', tail)
+        if not times:
+            return None
+        raw = times[-1].strip().replace('Z', '+00:00')
+        try:
+            dt = datetime.fromisoformat(raw)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except ValueError:
+            return None
+
+    if suf != '.csv':
+        return None
+
+    tail = _tail_file_text(path)
+    if not tail.strip():
+        return None
+
+    # AIM: last row's Time (s) + ``# Session-Date`` anchor (same as ``_read_csv_start_time``).
+    if _csv_source(path) == 'AIM':
+        lines = [ln.strip() for ln in tail.splitlines() if ln.strip()]
+        for ln in reversed(lines):
+            if ln.startswith('#') or ln.startswith('Time (s),'):
+                continue
+            if ',' not in ln:
+                continue
+            cell0 = ln.split(',', 1)[0].strip()
+            try:
+                sec = float(cell0)
+            except ValueError:
+                continue
+            return csv_start + timedelta(seconds=sec)
+        return None
+
+    # RaceBox: last ``Record,`` row — Time column is ISO or seconds-from-start
+    if 'Record,Time,' not in tail:
+        return None
+    lines = [ln.strip() for ln in tail.splitlines() if ln.strip()]
+    for ln in reversed(lines):
+        if not ln.startswith(tuple('0123456789')):
+            continue
+        parts = ln.split(',')
+        if len(parts) < 2:
+            continue
+        if not parts[0].strip().isdigit():
+            continue
+        ts = parts[1].strip()
+        if 'T' in ts:
+            ts2 = ts.replace('Z', '+00:00')
+            try:
+                dt = datetime.fromisoformat(ts2)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.astimezone(timezone.utc)
+            except ValueError:
+                continue
+        try:
+            elapsed = float(ts)
+            return csv_start + timedelta(seconds=elapsed)
+        except ValueError:
+            continue
+    return None
+
+
+def _interval_overlap_seconds(
+    a0: datetime, a1: datetime, b0: datetime, b1: datetime,
+) -> float:
+    """Length of intersection of two closed intervals in seconds (0 if none)."""
+    lo = max(a0, b0)
+    hi = min(a1, b1)
+    if hi <= lo:
+        return 0.0
+    return (hi - lo).total_seconds()
+
+
 def match_sessions(
     csv_paths: List[str],
     video_groups: List[VideoGroup],
 ) -> List[MatchedSession]:
     """
-    Match each CSV to the closest video group by timestamp.
-    Uses the Date UTC field from the CSV header.
+    Match each CSV to a video group: prefer **time-range overlap** (telemetry vs
+    grouped video wall-clock span); else closest video-group start within
+    ``MATCH_WINDOW``.
     """
     results = []
     for csv_path in csv_paths:
         try:
-            # Only read metadata, not full data (fast)
             csv_start = _read_csv_start_time(csv_path)
         except Exception:
             logger.debug('Could not read start time from %s', csv_path, exc_info=True)
             csv_start = None
 
-        best_group  = None
-        best_delta  = float('inf')
-        best_vstart = None
+        csv_end = _read_csv_session_end(csv_path, csv_start) if csv_start else None
+
+        best_group: Optional[VideoGroup] = None
+        best_delta = float('inf')
+        best_vstart: Optional[datetime] = None
+        matched = False
 
         if csv_start and video_groups:
-            for grp in video_groups:
-                if grp.start_time:
+            # ── 1) Overlap-based (needs session end) ─────────────────────────
+            if csv_end and csv_end > csv_start:
+                scored: List[Tuple[float, VideoGroup]] = []
+                for grp in video_groups:
+                    if not grp.start_time or not grp.end_time:
+                        continue
+                    ov = _interval_overlap_seconds(csv_start, csv_end, grp.start_time, grp.end_time)
+                    if ov > 0:
+                        scored.append((ov, grp))
+                if scored:
+                    scored.sort(
+                        key=lambda t: (-t[0], abs((csv_start - t[1].start_time).total_seconds()))
+                    )
+                    best_group = scored[0][1]
+                    best_vstart = best_group.start_time
+                    best_delta = abs((csv_start - best_vstart).total_seconds())
+                    matched = True
+
+            # ── 2) Legacy: closest group start within MATCH_WINDOW ─────────────
+            if not matched:
+                for grp in video_groups:
+                    if not grp.start_time:
+                        continue
                     delta = abs((csv_start - grp.start_time).total_seconds())
                     if delta < best_delta:
-                        best_delta  = delta
-                        best_group  = grp
+                        best_delta = delta
+                        best_group = grp
                         best_vstart = grp.start_time
+                matched = bool(best_group and best_delta <= MATCH_WINDOW)
 
-        matched = best_delta <= MATCH_WINDOW if best_group else False
         results.append(MatchedSession(
             csv_path    = csv_path,
             video_group = best_group if matched else None,

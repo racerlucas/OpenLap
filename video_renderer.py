@@ -605,6 +605,8 @@ def render_lap(
     track_map_areas:    Optional[list] = None, # [{lats,lons}] OSM area polygons, or None
     encode_options:     Optional[dict] = None,
     container_choice:   str = 'match_source',
+    force_vid_start_s:  Optional[float] = None,
+    force_vid_end_s:    Optional[float] = None,
     cancel_event=None,
 ) -> None:
     """
@@ -655,7 +657,24 @@ def render_lap(
     # ── Frame range ────────────────────────────────────────────────────────────
     sync_offset = sync_offset or 0.0
 
-    if job.gpx_start is not None:
+    # Optional override: explicit video window in seconds (useful for
+    # “video start → data end” exports where the session window does not start at 0s video time).
+    if force_vid_start_s is not None or force_vid_end_s is not None:
+        vid_start = float(force_vid_start_s or 0.0)
+        if vid_start < 0:
+            vid_start = 0.0
+        # Default end: whole video; caller can clamp further.
+        vid_end = float(force_vid_end_s) if force_vid_end_s is not None else (total / fps if fps else 0.0)
+        if video_path and fps and total:
+            vid_end = min(vid_end, total / fps)
+        if vid_end < vid_start:
+            vid_end = vid_start
+        f_start = max(0, int(vid_start * fps))
+        f_end   = min(total, int(math.ceil(vid_end * fps)))
+        lap_t0 = 0.0
+        lap_dur = 0.0
+        padding = 0.0
+    elif job.gpx_start is not None:
         vid_lap_start = sync_offset + job.gpx_start
         vid_lap_end   = sync_offset + job.gpx_end
         vid_start     = max(0.0, vid_lap_start - padding)

@@ -71,6 +71,27 @@ def estimate_segment_lengths_s(
     if sc == 'full':
         return [max(0.0, float(video_duration_s or 0.0))]
 
+    # Single output: from video 0s to data end (mapped to video time).
+    if sc == 'all_laps_data_end':
+        pts = list(getattr(sess, 'all_points', []) or [])
+        if not pts:
+            return []
+        try:
+            sess_end = float(getattr(pts[-1], 'elapsed', 0.0) or 0.0)
+        except Exception:
+            sess_end = 0.0
+        try:
+            off = item.get('sync_offset')
+            if off is None:
+                off = item.get('offset', 0.0)
+            off = float(off or 0.0)
+        except Exception:
+            off = 0.0
+        end = max(0.0, off + max(0.0, sess_end))
+        if video_duration_s and video_duration_s > 0:
+            end = min(end, float(video_duration_s))
+        return [max(0.0, end)]
+
     # Clip scope uses explicit seconds.
     if sc == 'clip':
         a = max(0.0, float(clip_start_s or 0.0))

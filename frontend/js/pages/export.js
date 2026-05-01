@@ -159,8 +159,11 @@
     let pad = parseFloat($('exp-padding')?.value);
     if (!Number.isFinite(pad)) pad = 5;
     pad = Math.min(60, Math.max(0, pad));
+    const { export_path: _dropPath, ...persistOpt } = base;
+    void _dropPath;
     return {
-      ...base,
+      ...persistOpt,
+      export_path: '',
       export_scope: ($('exp-scope')?.value || 'full'),
       export_padding: pad,
       export_clip_start_s: Math.max(0, parseFloat($('exp-clip-start')?.value) || 0),
@@ -308,11 +311,11 @@
             <div class="exp-export-path-stack">
               <div class="path-row">
                 <input type="text" id="exp-export-path" class="input-field exp-path-input"
-                       value="${_esc(cfg.export_path || '')}"
-                       placeholder="留空 = 与原视频同文件夹">
+                       value=""
+                       placeholder="本次导出填写；留空 = 写入原视频同一文件夹">
                 <button type="button" class="btn btn-secondary btn-sm" id="exp-browse-export">浏览…</button>
               </div>
-              <div class="exp-path-hint">输出文件名形如 VID_日期_时间；重名自动加 _2、_3。</div>
+              <div class="exp-path-hint">此文件夹路径不会保存在配置里（下次打开需重新填或浏览）；留空则输出到与原视频同一目录。文件名形如 VID_日期_时间；重名自动加 _2、_3。</div>
             </div>
           </div>
           <input type="hidden" id="exp-container-choice" value="match_source">
@@ -490,7 +493,8 @@
               <option value="selected_lap" ${scSel('selected_lap')}>当前圈</option>
               <option value="lap_range" ${scSel('lap_range')}>圈段范围（单视频）</option>
               <option value="fastest_lap" ${scSel('fastest_lap')}>最快圈</option>
-              <option value="all_laps" ${scSel('all_laps')}>全部圈</option>
+              <option value="all_laps" ${scSel('all_laps')}>全部圈（每圈一个文件）</option>
+              <option value="all_laps_data_end" ${scSel('all_laps_data_end')}>全部圈（单文件：从视频开头到数据结尾）</option>
               <option value="full" ${scSel('full')}>完整节</option>
             </select>
           </div>
@@ -972,12 +976,11 @@
       const inp = $('exp-export-path');
       if (path && inp) inp.value = path;
       _queueVbrCbrEstimate();
-      _queuePersistExportCfg();
     });
     const pathInp = $('exp-export-path');
     if (pathInp) {
-      pathInp.addEventListener('input', () => { _queueVbrCbrEstimate(); _queuePersistExportCfg(); });
-      pathInp.addEventListener('change', () => { _queueVbrCbrEstimate(); _queuePersistExportCfg(); });
+      pathInp.addEventListener('input', () => { _queueVbrCbrEstimate(); });
+      pathInp.addEventListener('change', () => { _queueVbrCbrEstimate(); });
     }
     $('exp-crf').addEventListener('input', e => {
       const lab = $('exp-crf-val');
@@ -1141,7 +1144,7 @@
 
     const $ = id => _container.querySelector('#' + id);
 
-    // Fetch config (encoder, export path) and overlay layout (ref_mode, is_bike, show_map/tel)
+    // Fetch config (encoder) and overlay layout (ref_mode, is_bike, show_map/tel)
     const [cfg, layout] = await Promise.all([
       API.getConfig().catch(() => ({})),
       API.getOverlay().catch(() => ({})),
@@ -1171,7 +1174,7 @@
       is_bike:          layout.is_bike           ?? false,
       show_map:         layout.show_map          ?? true,
       show_tel:         layout.show_tel          ?? true,
-      export_path:      exp.export_path ?? cfg.export_path ?? '',
+      export_path:      (exp.export_path || '').trim(),
       export_container_choice: exp.export_container_choice ?? cfg.export_container_choice ?? 'match_source',
       export_rate_mode: exp.export_rate_mode ?? cfg.export_rate_mode ?? 'cq',
       export_video_bitrate_kbps: exp.export_video_bitrate_kbps ?? cfg.export_video_bitrate_kbps ?? 0,

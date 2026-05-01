@@ -87,7 +87,9 @@ const API = (() => {
       debug_sync_seek:          () => ({ ok: true }),
       save_sessions_cache:      () => null,
       convert_xrk_session:       () => ({ ok: false, error: 'mock' }),
-      assign_video:              () => null,
+      assign_video:              () => ({ ok: true, video_paths: [] }),
+      assign_videos:             (_csv, paths) => ({ ok: true, video_paths: paths || [], warnings: [] }),
+      open_files_dialog:         () => [],
       aim_dll_status:                () => ({ found: false, path: '' }),
       download_aim_dll:              () => null,
       download_racebox_sessions:     () => null,
@@ -135,6 +137,7 @@ const API = (() => {
 
     openFolderDialog:  ()              => call('open_folder_dialog'),
     openFileDialog:    (filters)       => call('open_file_dialog', filters),
+    openFilesDialog:   (filters)       => call('open_files_dialog', filters),
 
     scanSessions:      (folder)        => call('scan_sessions', folder),
     getLaps:           (csvPath)       => call('get_laps', csvPath),
@@ -187,6 +190,7 @@ const API = (() => {
 
     convertXrkSession:        (csvPath)            => call('convert_xrk_session', csvPath),
     assignVideo:              (csvPath, videoPath) => call('assign_video', csvPath, videoPath),
+    assignVideos:             (csvPath, videoPaths) => call('assign_videos', csvPath, videoPaths),
     aimDllStatus:               ()                   => call('aim_dll_status'),
     downloadAimDll:             ()                   => call('download_aim_dll'),
     downloadRaceboxSessions:    ()                   => call('download_racebox_sessions'),
