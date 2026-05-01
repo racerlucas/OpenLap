@@ -77,7 +77,8 @@ jobs:
       - name: Skip (no new FFmpeg)
         if: steps.gate.outputs.build != 'true'
         shell: pwsh
-        run: Write-Host "Skipping release: ${{ steps.gate.outputs.reason }}"
+        run: |
+          Write-Host "Skipping release: ${{ steps.gate.outputs.reason }}"
 
       - name: Bump patch version in _version.py
         if: steps.gate.outputs.build == 'true'
