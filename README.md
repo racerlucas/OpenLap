@@ -166,6 +166,8 @@ Data 页提供“**切圈**”入口，包含两种方式：
 
 ## 常见问题
 
+支持 **Windows**、**macOS** 与 **Linux**。
+
 ### 扫描不到节
 
 - 检查 Settings 路径是否正确
@@ -243,7 +245,13 @@ python -m pip install -e ".[racebox-download]"
 python main.py
 ```
 
-配置文件默认位于：`<仓库根>/.openlap/config.json`。其它运行时写入项（缓存、RaceBox/Chromium、`Library/ffmpeg/` 便携布局等）均在该应用数据根下，参见上文「便携与本地数据目录」。
+配置文件与缓存路径见上文「便携与本地数据目录」（开发：`<仓库根>/.openlap/`；打包后与可执行文件同目录；可用环境变量 `OPENLAP_DATA_DIR` 覆盖）。
+
+**macOS / Linux 说明**
+
+- AIM 的 `.xrk` / `.xrz` / `.drk`：通过 `pip install -e .` 使用 **libxrk** 读取。MatLabXRK DLL 为 **Windows 专用二进制**，在 macOS / Linux 上不可用；上述平台仅支持 libxrk。
+- macOS 上硬件编码优先 **VideoToolbox**（`h264_videotoolbox`）。NVENC / AMF / QSV 仅在 Windows / Linux 可用。
+
 
 ---
 
