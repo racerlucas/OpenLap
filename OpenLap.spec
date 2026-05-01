@@ -20,6 +20,7 @@
 import os, sys, subprocess as _sp
 from pathlib import Path
 import playwright as _pw_mod
+import PyInstaller as _pyi
 
 HERE = Path(SPECPATH)
 
@@ -55,6 +56,8 @@ datas = [
     (str(HERE / 'frontend'), 'frontend'),
     # Style plugins (matplotlib gauge renderers for video export)
     (str(HERE / 'styles'), 'styles'),
+    # Track start/finish JSON templates + user-shareable tracks
+    (str(HERE / 'tracks'), 'tracks'),
     # Playwright — bundle the entire package including its Node.js driver
     # so RaceBox cloud download works without any extra installs.
     (os.path.dirname(_pw_mod.__file__), 'playwright'),
@@ -194,6 +197,9 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
+    # PyInstaller 6+ defaults to "_internal". Make it look like conventional apps.
+    # Keep backward-compat for older versions that don't support this kwarg.
+    **({'contents_directory': 'bin'} if tuple(int(x) for x in _pyi.__version__.split('.')[:2]) >= (6, 0) else {}),
     name='OpenLap',
 )
 

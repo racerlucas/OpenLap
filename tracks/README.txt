@@ -9,3 +9,4 @@
 1. 复制模板：`tracks/track.template.json` -> `tracks/<赛道名>.json`
 2. 填写赛道信息与 `label_info.line_lonlat`
 3. 在应用“切圈 -> 选择赛道”流程中选择该 JSON 使用
+

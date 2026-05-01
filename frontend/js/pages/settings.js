@@ -52,13 +52,6 @@
       ${_folderRow('VBOX',        'vbox_path',    cfg.vbox_path,    'Racelogic VBOX .vbo 文件目录')}
     </section>
 
-    <!-- Video & output -->
-    <section class="settings-section">
-      <div class="section-title">视频与输出</div>
-      ${_folderRow('视频源目录', 'video_path',  cfg.video_path,  '行车记录仪 / 车载视频')}
-      <p class="section-hint" style="margin-top:4px">编码、导出范围与并发等在<strong>导出</strong>页配置；<strong>导出输出文件夹仅在每次导出时选择</strong>，不会保存在此。</p>
-    </section>
-
     <!-- RaceBox cloud -->
     <section class="settings-section">
       <div class="section-title">RaceBox 云端</div>
