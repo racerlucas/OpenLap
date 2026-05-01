@@ -2,7 +2,7 @@
 track_map_cache.py — Fetch and cache OpenStreetMap motor-racing circuit outlines
 via the Overpass API.
 
-Cached on disk in ~/.openlap/track_maps/ so Overpass is only queried once
+Cached on disk under the app data directory (``track_maps/``) so Overpass is only queried once
 per ~111 km grid cell, and refreshed after _CACHE_DAYS days.
 """
 from __future__ import annotations
@@ -18,7 +18,6 @@ from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
-_CACHE_DIR       = Path.home() / '.openlap' / 'track_maps'
 _OVERPASS        = 'https://overpass-api.de/api/interpreter'
 _SEARCH_RADIUS_M = 8000   # metres around GPS centroid
 _CACHE_DAYS      = 30     # refresh candidates after this many days
@@ -26,9 +25,15 @@ _MAX_GEOM_PTS    = 500    # downsample polygon to at most this many points
 _TIMEOUT_S       = 10
 
 
+def _cache_dir() -> Path:
+    from openlap_paths import track_maps_dir
+
+    return track_maps_dir()
+
+
 def _cache_path(key: str) -> Path:
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    return _CACHE_DIR / f'{key}.json'
+    _cache_dir().mkdir(parents=True, exist_ok=True)
+    return _cache_dir() / f'{key}.json'
 
 
 def _query_overpass(lat: float, lon: float, radius_m: int = _SEARCH_RADIUS_M) -> list:

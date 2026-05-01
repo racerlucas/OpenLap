@@ -3,9 +3,12 @@
 #
 # Build:
 #   pip install pyinstaller
-#   pyinstaller OpenLap.spec
+#   python tools/build_windows_portable.py
+#   (or: pyinstaller OpenLap.spec  then  python tools/stage_dist_library_ffmpeg.py)
 #
-# Output: dist/OpenLap/  (onedir, faster startup than onefile)
+# Output: dist/OpenLap/  (onedir portable folder: OpenLap.exe, _internal/, Library/ffmpeg/, …)
+# User data (config, tracks, caches) resolves next to the exe when frozen; dev uses <repo>/.openlap/.
+# FFmpeg is NOT packed into _internal/: run stage_dist_library_ffmpeg.py so it lives under Library/ffmpeg/.
 #
 # Requires:
 #   - On Windows, each PyInstaller run auto-downloads **latest** FFmpeg (BtbN
@@ -14,7 +17,7 @@
 #   - Fallback if fetch skipped / failed: ffmpeg.exe next to this spec or PATH (ffmpeg_paths.py)
 #   - All Python deps installed in the active environment
 
-import os, sys, shutil, subprocess as _sp
+import os, sys, subprocess as _sp
 from pathlib import Path
 import playwright as _pw_mod
 
@@ -29,46 +32,35 @@ if _tracks_dir.is_dir():
     if _real_tracks and os.environ.get('ALLOW_BUNDLE_TRACKS', '').strip().lower() not in ('1', 'true', 'yes'):
         raise RuntimeError(
             '[OpenLap.spec] Refusing to build: found non-template tracks/*.json (commercial). '
-            'Move them to ~/.openlap/tracks/ or set ALLOW_BUNDLE_TRACKS=1 to override.'
+            'Keep user tracks outside the repo (e.g. next to the packaged exe under tracks/) '
+            'or set ALLOW_BUNDLE_TRACKS=1 to override.'
         )
 
 # ── Auto-fetch FFmpeg (Windows) before bundling ───────────────────────────────
-if (
-    sys.platform == 'win32'
-    and os.environ.get('SKIP_FFMPEG_FETCH', '').strip().lower() not in ('1', 'true', 'yes')
-):
-    _ff_script = HERE / 'tools' / 'fetch_ffmpeg.py'
-    if _ff_script.is_file():
-        print('[OpenLap.spec] Downloading latest FFmpeg → third_party/ffmpeg/win64/bin/ …')
-        _pr = _sp.run(
-            [sys.executable, str(_ff_script), '--latest'],
-            cwd=str(HERE),
-        )
-        if _pr.returncode != 0:
-            raise RuntimeError(
-                '[OpenLap.spec] FFmpeg fetch failed (exit %s). '
-                'Check network, or set SKIP_FFMPEG_FETCH=1 and place ffmpeg.exe/ffprobe.exe manually.'
-                % _pr.returncode
+# Default behavior: only download when the staged binaries are missing.
+# Force update: set FORCE_FFMPEG_FETCH=1
+if sys.platform == 'win32':
+    _staged_dir = HERE / 'third_party' / 'ffmpeg' / 'win64' / 'bin'
+    _staged_ok = (_staged_dir / 'ffmpeg.exe').is_file() and (_staged_dir / 'ffprobe.exe').is_file()
+    _skip = os.environ.get('SKIP_FFMPEG_FETCH', '').strip().lower() in ('1', 'true', 'yes')
+    _force = os.environ.get('FORCE_FFMPEG_FETCH', '').strip().lower() in ('1', 'true', 'yes')
+    if not _skip and (not _staged_ok or _force):
+        _ff_script = HERE / 'tools' / 'fetch_ffmpeg.py'
+        if _ff_script.is_file():
+            why = 'forced' if _force else 'missing staged binaries'
+            print(f'[OpenLap.spec] Downloading latest FFmpeg ({why}) → third_party/ffmpeg/win64/bin/ …')
+            _pr = _sp.run(
+                [sys.executable, str(_ff_script), '--latest'],
+                cwd=str(HERE),
             )
-    else:
-        print('[OpenLap.spec] warning: tools/fetch_ffmpeg.py missing — using existing third_party / PATH')
-
-# ── Locate ffmpeg / ffprobe ───────────────────────────────────────────────────
-def _find_bin(name):
-    """Find ffmpeg/ffprobe: prefer staged third_party, then spec dir, then PATH."""
-    staged = HERE / 'third_party' / 'ffmpeg' / 'win64' / 'bin' / (name + '.exe')
-    if staged.is_file():
-        return str(staged)
-    local = HERE / (name + '.exe')
-    if local.is_file():
-        return str(local)
-    found = shutil.which(name)
-    if found:
-        return found
-    return None
-
-FFMPEG_BIN  = _find_bin('ffmpeg')
-FFPROBE_BIN = _find_bin('ffprobe')
+            if _pr.returncode != 0:
+                raise RuntimeError(
+                    '[OpenLap.spec] FFmpeg fetch failed (exit %s). '
+                    'Check network, or set SKIP_FFMPEG_FETCH=1 and place ffmpeg.exe/ffprobe.exe manually.'
+                    % _pr.returncode
+                )
+        else:
+            print('[OpenLap.spec] warning: tools/fetch_ffmpeg.py missing — using existing third_party / PATH')
 
 # ── Data files ────────────────────────────────────────────────────────────────
 datas = [
@@ -94,15 +86,8 @@ for dll in _dlls:
     if p.is_file():
         datas.append((str(p), '.'))
 
-# FFmpeg binaries
-for _bin, _name in [(FFMPEG_BIN, 'ffmpeg.exe'), (FFPROBE_BIN, 'ffprobe.exe')]:
-    if _bin:
-        datas.append((_bin, '.'))
-
-# FFmpeg build info (when staged via tools/fetch_ffmpeg.py)
-_ff_info = HERE / 'third_party' / 'ffmpeg' / 'win64' / 'BUILD_INFO.json'
-if _ff_info.is_file():
-    datas.append((str(_ff_info), 'third_party/ffmpeg/win64'))
+# FFmpeg: staged under third_party/… then copied to dist/OpenLap/Library/ffmpeg/ by
+# tools/stage_dist_library_ffmpeg.py (not bundled into _internal/).
 
 # Licenses / notices
 _lic_dir = HERE / 'licenses'

@@ -196,14 +196,16 @@ def run_export(
 
         # ── Join phase ────────────────────────────────────────────────────────
         # Keep first source path for default export dir (same folder as camera file;
-        # not ~/.openlap/video_cache when segments are joined).
+        # not app-data video_cache when segments are joined).
         first_src_for_export_dir = videos[0] if videos else None
         video_path = first_src_for_export_dir
         tmp_joined = None
         join_share = 0.0
         if len(videos) > 1:
             from pathlib import Path as _Path
-            _vcache = _Path.home() / '.openlap' / 'video_cache'
+            from openlap_paths import video_cache_dir
+
+            _vcache = video_cache_dir()
             _vcache.mkdir(parents=True, exist_ok=True)
             join_share = 0.10
             tmp_joined = str(_vcache / f"joined_{os.path.basename(csv_path)}.mp4")

@@ -5,6 +5,9 @@ racebox_auth.json
 *.dll
 .claude/
 
+# Local app state (config, caches, tracks, logs — never under ~/.openlap)
+.openlap/
+
 # FFmpeg binaries (copied locally for bundling — not committed)
 ffmpeg.exe
 ffprobe.exe

@@ -114,8 +114,9 @@ def test_load_missing_file_returns_defaults(tmp_config_dir):
 
 
 def test_load_corrupt_file_returns_defaults(tmp_config_dir):
-    import app_config
-    app_config.CONFIG_FILE.write_text("not valid json")
+    from openlap_paths import config_file
+
+    config_file().write_text("not valid json")
     loaded = AppConfig.load()
     assert loaded.telemetry_path == ""
 

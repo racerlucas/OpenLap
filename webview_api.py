@@ -29,7 +29,7 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import webview
 
@@ -41,6 +41,35 @@ _ALLOWED_VIDEO_EXTENSIONS = frozenset({
     '.mp4', '.mov', '.avi', '.mkv', '.m4v',
     '.MP4', '.MOV', '.AVI', '.MKV', '.M4V',
 })
+
+
+def _session_info_manual_video_paths(si: object) -> Optional[List[str]]:
+    """Absolute paths from ``session_info`` manual bindings (``_video_paths`` or legacy ``_video_override``)."""
+    if not isinstance(si, dict):
+        return None
+    raw = si.get('_video_paths')
+    out: List[str] = []
+    if isinstance(raw, list):
+        for p in raw:
+            if not isinstance(p, str) or not p.strip():
+                continue
+            try:
+                ap = str(Path(p.strip()).resolve())
+            except OSError:
+                continue
+            if os.path.isfile(ap):
+                out.append(ap)
+    if out:
+        return out
+    legacy = si.get('_video_override')
+    if isinstance(legacy, str) and legacy.strip():
+        try:
+            ap = str(Path(legacy.strip()).resolve())
+        except OSError:
+            return None
+        if os.path.isfile(ap):
+            return [ap]
+    return None
 
 
 class _VideoFileHandler(http.server.BaseHTTPRequestHandler):
@@ -533,7 +562,7 @@ class WebviewAPI:
         if 'export_scope' in data:
             v = str(data.get('export_scope') or 'full').strip()
             if v in (
-                'selected_lap', 'lap_range', 'fastest_lap', 'all_laps', 'full', 'clip',
+                'selected_lap', 'lap_range', 'fastest_lap', 'all_laps', 'all_laps_data_end', 'full', 'clip',
             ):
                 self._config.export_scope = v
         if 'export_padding' in data:
@@ -913,9 +942,9 @@ class WebviewAPI:
             abs_csv = str(Path(csv).resolve())
             sync_offset, sync_source = _lookup_sync(csv)
             si = self._config.session_info.get(abs_csv, {}) if isinstance(self._config.session_info, dict) else {}
-            video_override = si.get('_video_override')
-            if video_override and os.path.isfile(video_override):
-                video_paths = [video_override]
+            manual = _session_info_manual_video_paths(si)
+            if manual:
+                video_paths = manual
                 matched = True
             else:
                 video_paths = m.video_group.paths if m.video_group else []
@@ -963,12 +992,12 @@ class WebviewAPI:
         cache always reflects the complete set, not just the last path scanned.
         """
         import json
-        from pathlib import Path as _Path
-        from app_config import SCAN_CACHE_FILE
+        from openlap_paths import scan_cache_file
         try:
-            SCAN_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            scf = scan_cache_file()
+            scf.parent.mkdir(parents=True, exist_ok=True)
             data = {'sessions': sessions}
-            with open(SCAN_CACHE_FILE, 'w', encoding='utf-8') as f:
+            with open(scf, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
             logger.info('Saved %d sessions to scan cache', len(sessions))
         except Exception:
@@ -1004,10 +1033,10 @@ class WebviewAPI:
             abs_csv = str(Path(csv).resolve()) if csv else ''
             sync_offset, sync_source = _lookup_sync(csv)
             si = self._config.session_info.get(abs_csv, {}) if isinstance(self._config.session_info, dict) else {}
-            video_override = si.get('_video_override')
+            manual = _session_info_manual_video_paths(si)
             cached_paths = s.get('video_paths', [])
-            if video_override and os.path.isfile(video_override):
-                video_paths = [video_override]
+            if manual:
+                video_paths = manual
                 matched = True
             else:
                 video_paths = cached_paths
@@ -1428,6 +1457,20 @@ class WebviewAPI:
         if result:
             return str(Path(result[0]).resolve())
         return None
+
+    def open_files_dialog(self, filters: list | None = None) -> list:
+        """Open-file dialog with multi-select. Returns a list of absolute paths (empty if cancelled)."""
+        if self._window is None:
+            return []
+        ft = tuple(filters) if filters else ()
+        result = self._window.create_file_dialog(
+            webview.OPEN_DIALOG,
+            allow_multiple=True,
+            file_types=ft,
+        )
+        if not result:
+            return []
+        return [str(Path(p).resolve()) for p in result]
 
     # ── Weather ───────────────────────────────────────────────────────────────
     def get_weather(self, lat: float, lon: float, date_iso: str) -> dict:
@@ -2232,13 +2275,13 @@ class WebviewAPI:
         except Exception:
             return {'playwright': False, 'chromium': False}
 
-        # Check if Chromium exists in PLAYWRIGHT_BROWSERS_PATH (same location
-        # the runtime hook and the driver will use at runtime).
+        # Check if Chromium exists in PLAYWRIGHT_BROWSERS_PATH (app data / portable layout).
         import glob as _glob, os
-        local_app = os.environ.get('LOCALAPPDATA', os.path.expanduser('~'))
+        from openlap_paths import playwright_browsers_dir
+
         browsers_path = os.environ.get(
             'PLAYWRIGHT_BROWSERS_PATH',
-            os.path.join(local_app, 'ms-playwright'),
+            str(playwright_browsers_dir()),
         )
         chromium_dirs = _glob.glob(os.path.join(browsers_path, 'chromium*'))
         return {'playwright': playwright_ok, 'chromium': bool(chromium_dirs)}
@@ -2254,7 +2297,10 @@ class WebviewAPI:
                 node_exe, cli_js = compute_driver_executable()
                 import subprocess
                 self._push('racebox_setup_log', message='Downloading Chromium (~130 MB, one-time)…')
+                from openlap_paths import playwright_browsers_dir
+
                 env = os.environ.copy()
+                env.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(playwright_browsers_dir()))
                 proc = subprocess.Popen(
                     [str(node_exe), str(cli_js), 'install', 'chromium'],
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -2350,21 +2396,22 @@ class WebviewAPI:
     def get_about_info(self) -> dict:
         """Return diagnostic strings for the About section."""
         import sys
-        from app_config import CONFIG_FILE
+        from openlap_paths import config_file
         from _version import __version__
         return {
             'version': __version__,
             'python': f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}',
-            'config': str(CONFIG_FILE),
+            'config': str(config_file()),
         }
 
     # ── AIM DLL status ────────────────────────────────────────────────────────
     def aim_dll_status(self) -> dict:
         """Return whether the AIM MatLabXRK DLL is present."""
         import glob as _glob, sys, os
-        from pathlib import Path
-        # Persistent user directory is checked first so the DLL survives app rebuilds.
-        search_dirs = [str(Path.home() / '.openlap')]
+        # Persistent app-data directory first so the DLL survives app rebuilds.
+        from openlap_paths import app_data_dir
+
+        search_dirs = [str(app_data_dir())]
         if getattr(sys, 'frozen', False):
             search_dirs += [sys._MEIPASS, os.path.dirname(sys.executable)]
         else:
@@ -2391,7 +2438,9 @@ class WebviewAPI:
                     return
                 self._push('aim_dll_progress', value=70, message='Extracting DLL…')
                 from pathlib import Path as _Path
-                install_dir = str(_Path.home() / '.openlap')
+                from openlap_paths import app_data_dir
+
+                install_dir = str(app_data_dir())
                 os.makedirs(install_dir, exist_ok=True)
                 import io, zipfile, glob as _glob
                 with zipfile.ZipFile(io.BytesIO(data)) as zf:
@@ -2435,7 +2484,9 @@ class WebviewAPI:
             import xrk_to_csv as _xrk
             import glob as _glob, sys
             from pathlib import Path
-            search_dirs = [str(Path.home() / '.openlap')]
+            from openlap_paths import app_data_dir
+
+            search_dirs = [str(app_data_dir())]
             if getattr(sys, 'frozen', False):
                 search_dirs += [sys._MEIPASS, os.path.dirname(sys.executable)]
             else:
@@ -2451,12 +2502,46 @@ class WebviewAPI:
             return {'ok': False, 'error': str(e)}
 
     # ── Manual video assignment ───────────────────────────────────────────────
-    def assign_video(self, csv_path: str, video_path: str) -> None:
-        """Manually link a video file to a telemetry session."""
+    def assign_video(self, csv_path: str, video_path: str) -> dict:
+        """Manually link one video file to a telemetry session (see ``assign_videos``)."""
+        return self.assign_videos(csv_path, [video_path])
+
+    def assign_videos(self, csv_path: str, video_paths: list) -> dict:
+        """Manually bind one or more video files to a session.
+
+        Paths are de-duplicated, missing files dropped, then ordered by embedded
+        start time (``creation_time`` / Apple date, same heuristics as scanning)
+        so export concat matches real recording order.
+
+        Returns ``{'ok': True, 'video_paths': [...], 'warnings': [...]}`` (possibly reordered).
+        """
+        from video_clip_order import sort_video_paths_with_timecode
+
         abs_csv = str(Path(csv_path).resolve())
         si = self._config.session_info.setdefault(abs_csv, {})
-        si['_video_override'] = str(Path(video_path).resolve())
+        cleaned: List[str] = []
+        for p in video_paths or []:
+            if not isinstance(p, str) or not p.strip():
+                continue
+            try:
+                ap = str(Path(p.strip()).resolve())
+            except OSError:
+                continue
+            if os.path.isfile(ap):
+                cleaned.append(ap)
+        cleaned = list(dict.fromkeys(cleaned))
+        if not cleaned:
+            si.pop('_video_paths', None)
+            si.pop('_video_override', None)
+            self._config.save()
+            return {'ok': True, 'video_paths': []}
+        ordered, warn = sort_video_paths_with_timecode(cleaned)
+        for w in warn:
+            logger.info('assign_videos: %s', w)
+        si['_video_paths'] = ordered
+        si.pop('_video_override', None)
         self._config.save()
+        return {'ok': True, 'video_paths': list(si['_video_paths']), 'warnings': warn}
 
     def import_dropped_paths(self, paths: list, selected_csv_path: str = '') -> dict:
         """Handle drag-and-drop import for telemetry/video files or folders."""
@@ -2515,9 +2600,8 @@ class WebviewAPI:
 
             if ext in video_ext:
                 if selected_csv:
-                    abs_csv = os.path.abspath(selected_csv)
-                    si = self._config.session_info.setdefault(abs_csv, {})
-                    si['_video_override'] = p
+                    abs_csv = str(_Path(selected_csv).resolve())
+                    self.assign_videos(abs_csv, [p])
                     imported.append(f'video assigned to session: {os.path.basename(p)}')
                 else:
                     updated_cfg['video_path'] = parent
@@ -2570,14 +2654,16 @@ class WebviewAPI:
         return launch_gui_split(telemetry_path)
 
     def list_track_jsons(self) -> list:
-        """List track JSON files from user-local ~/.openlap/tracks/ directory.
+        """List track JSON files from the app data ``tracks/`` directory.
 
         We intentionally do NOT ship commercial track JSONs inside the app bundle.
         Users can create minimal track JSONs via the manual line tool (lap_split_tools/gui_split.py),
-        or copy their own JSONs into ~/.openlap/tracks/.
+        or copy their own JSONs into that folder (next to the exe when packaged).
         """
         import json
-        base = Path.home() / '.openlap' / 'tracks'
+        from openlap_paths import tracks_dir
+
+        base = tracks_dir()
         base.mkdir(parents=True, exist_ok=True)
         items = []
         for p in sorted(base.glob('*.json')):

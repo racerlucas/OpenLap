@@ -72,7 +72,7 @@ const API = (() => {
         { name: 'libx264', label: 'H.264 software', available: true },
       ]}),
       resolve_export_encoder: (codec, family) => ({ ok: true, encoder: 'libx264' }),
-      get_about_info:    () => ({ version: '0.0.0-mock', python: '3.x.x', config: '~/.openlap/config.json' }),
+      get_about_info:    () => ({ version: '0.0.0-mock', python: '3.x.x', config: '.openlap/config.json (mock)' }),
       get_session_meta:  () => ({ track: '', laps: '', best: '', best_secs: null }),
       get_video_server_port:    () => 0,
       get_video_fps:            () => ({ ok: false, error: 'mock' }),

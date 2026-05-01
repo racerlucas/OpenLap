@@ -17,13 +17,16 @@ python -m pytest tests/ -k "test_delta" -q              # single test by name
 npm run test:run           # one-shot
 npm test                   # watch mode
 
-# Build Windows .exe (onedir, outputs to dist/OpenLap/)
+# Build Windows portable folder (onedir → dist/OpenLap/, not a single onefile exe)
 pip install pyinstaller
-# ``pyinstaller OpenLap.spec`` (on Windows) auto-runs ``tools/fetch_ffmpeg.py --latest``
-# before bundling — downloads the current BtbN win64 GPL zip into third_party/ffmpeg/win64/bin/.
+# ``OpenLap.spec`` (on Windows) auto-runs ``tools/fetch_ffmpeg.py --latest`` before Analysis —
+# downloads BtbN win64 GPL zip into third_party/ffmpeg/win64/bin/.
 # Offline / no network: ``set SKIP_FFMPEG_FETCH=1`` then place ffmpeg.exe / ffprobe.exe there (or PATH).
 # Manual fetch: ``python tools/fetch_ffmpeg.py`` (latest) or ``python tools/fetch_ffmpeg.py --stable`` (Gyan).
-pyinstaller OpenLap.spec --clean -y
+python tools/build_windows_portable.py
+# (Equivalent: ``pyinstaller OpenLap.spec --clean -y`` then ``python tools/stage_dist_library_ffmpeg.py``.)
+# Dev: config/scan cache/tracks/caches under ``<repo>/.openlap/`` (gitignored). Frozen: next to OpenLap.exe.
+# FFmpeg/ffprobe are copied to dist/OpenLap/Library/ffmpeg/ at build time (not inside _internal/).
 ```
 
 ## Architecture
@@ -61,11 +64,18 @@ Each `.py` in `styles/` must export:
 
 ### Data model
 
-All four loaders (racebox, aim, gpx, motec) return the same types from `racebox_data.py`: `Session`, `Lap`, `DataPoint`. Never add source-specific fields to `DataPoint`. `session_scanner.py` drives scanning across all configured folders and maintains `~/.openlap/scan_cache.json`.
+All four loaders (racebox, aim, gpx, motec) return the same types from `racebox_data.py`: `Session`, `Lap`, `DataPoint`. Never add source-specific fields to `DataPoint`. `session_scanner.py` drives scanning across all configured folders and persists scan cache under the app data dir (``<repo>/.openlap/scan_cache.json`` in dev).
 
 ### Config
 
-`AppConfig` dataclass persisted to `~/.openlap/config.json`. Overlay layout is nested as `OverlayLayout` (with `gauges: List[dict]`). Named presets live in `AppConfig.presets` (name → serialized `OverlayLayout` dict). On load, if `active_preset` is set the overlay is always rebuilt from the preset — unsaved edits to the live layout are discarded on restart.
+`AppConfig` dataclass persisted to ``<repo>/.openlap/config.json`` when running from source (see `openlap_paths.app_data_dir`). Overlay layout is nested as `OverlayLayout` (with `gauges: List[dict]`). Named presets live in `AppConfig.presets` (name → serialized `OverlayLayout` dict). On load, if `active_preset` is set the overlay is always rebuilt from the preset — unsaved edits to the live layout are discarded on restart.
+
+### Portable paths (all local / app-data-root)
+
+Everything the app writes (config, scan cache, tracks, caches, RaceBox login, joined-video temp files, FFmpeg library layout when staged, Playwright Chromium) resolves under **`openlap_paths.app_data_dir()`**: unfrozen ``<repo>/.openlap/``, frozen **`dirname(OpenLap.exe)`**, optional **`OPENLAP_DATA_DIR`** absolute override — see README “便携与本地数据目录”. No telemetry blobs are uploaded; user-chosen telemetry/video/export folders from Settings remain separate arbitrary local paths.
+
+- ``main.py`` uses ``os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(playwright_browsers_dir()))`` so installs land in ``<app_data>/ms-playwright/`` instead of `%LOCALAPPDATA%`; `OpenLap.spec` rt hook does the equivalent for bundles (`<exe_dir>/ms-playwright`).
+- One-off migration from legacy ``~/.openlap`` (config/scan cache) and ``%APPDATA%/OpenLap/racebox_auth.json`` → `openlap_paths`.
 
 Sync offsets are stored in three fields: `offsets` (csv_path → float), `offset_sources` (csv_path → `'user'`|`'auto'`), and `auto_sync_failed` (list of csv_paths where auto-sync was tried but confidence was too low).
 

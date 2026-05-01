@@ -5,11 +5,10 @@ from __future__ import annotations
 import json
 import logging
 import urllib.request
-from pathlib import Path
+
+from openlap_paths import weather_cache_file
 
 logger = logging.getLogger(__name__)
-
-CACHE_FILE = Path.home() / '.openlap' / 'weather_cache.json'
 
 # WMO Weather Interpretation Codes → short description
 _WMO: dict[int, str] = {
@@ -144,8 +143,9 @@ def _format(hourly: dict, hour: int) -> tuple[str, str]:
 
 def _load_cache() -> dict:
     try:
-        if CACHE_FILE.exists():
-            return json.loads(CACHE_FILE.read_text(encoding='utf-8'))
+        cf = weather_cache_file()
+        if cf.exists():
+            return json.loads(cf.read_text(encoding='utf-8'))
     except Exception:
         pass
     return {}
@@ -153,8 +153,9 @@ def _load_cache() -> dict:
 
 def _save_cache(cache: dict) -> None:
     try:
-        CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        CACHE_FILE.write_text(
+        cf = weather_cache_file()
+        cf.parent.mkdir(parents=True, exist_ok=True)
+        cf.write_text(
             json.dumps(cache, ensure_ascii=False), encoding='utf-8')
     except Exception as exc:
         logger.debug('Weather cache save failed: %s', exc)

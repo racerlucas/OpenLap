@@ -42,11 +42,13 @@ def racebox_car_session(racebox_car_csv_path):
 
 @pytest.fixture
 def tmp_config_dir(tmp_path, monkeypatch):
-    """Redirect config to a temp dir so tests don't touch ~/.openlap/config.json."""
+    """Redirect app data root to tmp_path so tests stay isolated."""
+    import openlap_paths
+
+    monkeypatch.setattr(openlap_paths, "app_data_dir", lambda: tmp_path)
     import app_config
-    fake_config = tmp_path / "config.json"
+
     nonexistent = tmp_path / "nonexistent.json"
-    monkeypatch.setattr(app_config, "CONFIG_FILE", fake_config)
     monkeypatch.setattr(app_config, "_OLD_CONFIG_V2", nonexistent)
     monkeypatch.setattr(app_config, "_OLD_CONFIG_V1", nonexistent)
     return tmp_path

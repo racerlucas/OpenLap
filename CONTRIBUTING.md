@@ -29,10 +29,11 @@ All tests must pass before opening a PR. If you're adding a feature, add a test.
 ## Project layout
 
 ```
-main.py               entry point, freeze_support for multiprocessing
+main.py               entry point; sets default PLAYWRIGHT_BROWSERS_PATH under openlap_paths
 webview_api.py        every public method here is callable from JS
 auto_sync.py          background video-telemetry sync detection (cross-correlation)
-app_config.py         AppConfig dataclass — persisted to ~/.openlap/config.json
+app_config.py         AppConfig dataclass — persisted under app data dir (see openlap_paths)
+openlap_paths.py      single source of truth for portable app data roots (frozen vs dev, migrations)
 frontend/             vanilla JS + HTML, no build step
   js/pages/           one file per tab (data, editor, export, settings)
   js/gauges/          JS canvas renderers — one per gauge style

@@ -204,7 +204,10 @@ class LapSplitGUI:
         # IMPORTANT: this uses ONLY the manually drawn line (commercial SF coordinates
         # must never be inferred from lap/lap_elapsed fields).
         try:
-            want = messagebox.askyesno("保存为赛道？", "是否将当前手动设置的起终点线保存为赛道 JSON？\n（保存到 ~/.openlap/tracks/，仅用于打标签/历史记录）")
+            want = messagebox.askyesno(
+                "保存为赛道？",
+                "是否将当前手动设置的起终点线保存为赛道 JSON？\n（保存到应用数据目录下的 tracks/，仅用于打标签/历史记录）",
+            )
             if not want:
                 return
             default_name = os.path.splitext(os.path.basename(self.current_file))[0]
@@ -221,7 +224,9 @@ class LapSplitGUI:
             if not slug:
                 slug = 'Track'
 
-            out_dir = Path.home() / '.openlap' / 'tracks'
+            from openlap_paths import tracks_dir
+
+            out_dir = tracks_dir()
             out_dir.mkdir(parents=True, exist_ok=True)
             out_path = out_dir / f'{slug}.json'
 

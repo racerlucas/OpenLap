@@ -1,5 +1,5 @@
 # app_config.py — persistent application configuration
-# Saved to ~/.openlap/config.json
+# Default save location: <repo>/.openlap/config.json (dev) or next to OpenLap.exe (frozen).
 
 from __future__ import annotations
 import json
@@ -9,10 +9,9 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional
 
-logger = logging.getLogger(__name__)
+from openlap_paths import config_file, scan_cache_file
 
-CONFIG_FILE     = Path.home() / '.openlap' / 'config.json'
-SCAN_CACHE_FILE = Path.home() / '.openlap' / 'scan_cache.json'
+logger = logging.getLogger(__name__)
 _OLD_CONFIG_V2  = Path.home() / '.telemetry_overlay' / 'config.json'
 _OLD_CONFIG_V1  = Path.home() / '.racebox_studio'    / 'config.json'
 
@@ -135,8 +134,9 @@ class AppConfig:
     # ── Persistence ───────────────────────────────────────────────────────────
 
     def save(self) -> None:
-        CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+        cf = config_file()
+        cf.parent.mkdir(parents=True, exist_ok=True)
+        with open(cf, 'w', encoding='utf-8') as f:
             json.dump(asdict(self), f, indent=2, default=str)
 
     def schedule_save(self, delay: float = 0.5) -> None:
@@ -156,21 +156,22 @@ class AppConfig:
 
     @classmethod
     def load(cls) -> 'AppConfig':
+        cf = config_file()
         # One-time migration from older config locations
-        if not CONFIG_FILE.exists():
+        if not cf.exists():
             _src = next((p for p in (_OLD_CONFIG_V2, _OLD_CONFIG_V1) if p.exists()), None)
             if _src:
                 try:
-                    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(_src, CONFIG_FILE)
+                    cf.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(_src, cf)
                 except Exception:
                     logger.debug('Config migration from %s failed', _src, exc_info=True)
         try:
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            with open(cf, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             return _from_dict(data)
         except Exception:
-            logger.warning('Failed to load config from %s, using defaults', CONFIG_FILE, exc_info=True)
+            logger.warning('Failed to load config from %s, using defaults', cf, exc_info=True)
             return cls()
 
 
@@ -197,8 +198,9 @@ def save_scan_cache(tel_path: str, vid_path: str,
         })
     data = {'tel_path': tel_path, 'tel_paths': tel_path, 'vid_path': vid_path, 'sessions': entries}
     try:
-        SCAN_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(SCAN_CACHE_FILE, 'w', encoding='utf-8') as f:
+        scf = scan_cache_file()
+        scf.parent.mkdir(parents=True, exist_ok=True)
+        with open(scf, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
     except Exception:
         logger.debug('Failed to write scan cache', exc_info=True)
@@ -207,7 +209,7 @@ def save_scan_cache(tel_path: str, vid_path: str,
 def load_scan_cache() -> dict:
     """Return cached scan data, or {} on miss/error."""
     try:
-        with open(SCAN_CACHE_FILE, 'r', encoding='utf-8') as f:
+        with open(scan_cache_file(), 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception:
         return {}

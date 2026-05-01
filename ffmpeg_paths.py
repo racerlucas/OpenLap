@@ -1,12 +1,16 @@
 """
 Resolve ffmpeg / ffprobe executables for dev trees and PyInstaller bundles.
 
-Layout (Windows, matches ``OpenLap.spec``):
+Dev / repo:
   ``<repo>/third_party/ffmpeg/win64/bin/ffmpeg.exe`` (+ ffprobe.exe)
 
-Frozen (PyInstaller onedir): binaries are copied to ``sys._MEIPASS`` root
-(see spec ``datas``); ``rthooks/pyi_rth_path.py`` also prepends ``_MEIPASS``
-to PATH for bare ``ffmpeg`` invocations.
+Frozen (Windows portable onedir):
+  ``<exe_dir>/Library/ffmpeg/ffmpeg.exe`` — populated at **build time** by
+  ``tools/stage_dist_library_ffmpeg.py`` (not inside ``_internal/``).
+
+Fallback: ``sys._MEIPASS`` root (legacy bundles), staged ``third_party``, repo root, PATH.
+
+``rthooks/pyi_rth_path.py`` prepends ``Library/ffmpeg`` and ``_MEIPASS`` to PATH.
 
 Override at runtime: set ``FFMPEG_BIN`` / ``FFPROBE_BIN`` to full paths.
 """
@@ -19,6 +23,20 @@ from pathlib import Path
 from typing import List, Optional
 
 _ROOT = Path(__file__).resolve().parent
+
+
+def _portable_library_bin(name: str) -> Optional[Path]:
+    if not getattr(sys, 'frozen', False):
+        return None
+    from openlap_paths import library_ffmpeg_dir
+
+    ext = '.exe' if sys.platform == 'win32' else ''
+    d = library_ffmpeg_dir()
+    for fn in (f'{name}{ext}', name):
+        p = d / fn
+        if p.is_file():
+            return p
+    return None
 
 
 def _meipass_bin(name: str) -> Optional[Path]:
@@ -60,7 +78,12 @@ def get_ffmpeg_bin() -> str:
             return str(ep)
         if shutil.which(ev):
             return ev
-    p = _meipass_bin('ffmpeg') or _staged_third_party_bin('ffmpeg') or _repo_root_bin('ffmpeg')
+    p = (
+        _portable_library_bin('ffmpeg')
+        or _meipass_bin('ffmpeg')
+        or _staged_third_party_bin('ffmpeg')
+        or _repo_root_bin('ffmpeg')
+    )
     if p is not None:
         return str(p)
     w = shutil.which('ffmpeg')
@@ -76,7 +99,12 @@ def get_ffprobe_bin() -> str:
             return str(ep)
         if shutil.which(ev):
             return ev
-    p = _meipass_bin('ffprobe') or _staged_third_party_bin('ffprobe') or _repo_root_bin('ffprobe')
+    p = (
+        _portable_library_bin('ffprobe')
+        or _meipass_bin('ffprobe')
+        or _staged_third_party_bin('ffprobe')
+        or _repo_root_bin('ffprobe')
+    )
     if p is not None:
         return str(p)
     w = shutil.which('ffprobe')

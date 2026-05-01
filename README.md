@@ -27,6 +27,25 @@
 
 > 若出现 Windows SmartScreen：点击“更多信息” -> “仍要运行”。
 
+---
+
+## 便携与本地数据目录
+
+OpenLap **不会**把你的节或视频上传到云端；处理与导出都在本机完成。你在 **Settings** 里配置的遥测/视频/导出文件夹仍由你自选（任意本地路径）。除此以外，**应用自身的配置与缓存**只写在一个「应用数据根」里，整块目录可与程序一起拷贝，达到**便携部署**语义：
+
+| 运行方式 | 应用数据根 |
+| :--- | :--- |
+| Windows 解压版 / 打包目录里的 `OpenLap.exe` | 与 **`OpenLap.exe` 同一文件夹**（与 `_internal`、`Library/` 等并列） |
+| 从源码 **`python main.py`** | `<仓库根>/.openlap/`（已加入 `.gitignore`，**不写用户主目录**） |
+
+在同一应用数据根下通常会出现例如：`config.json`、`scan_cache.json`、`tracks/`（赛道 JSON）、`logs/`、`track_maps/`、`weather_cache.json`、`video_cache/`（多段视频拼接临时文件）、便携打包时的 **`Library/ffmpeg/`**、**`racebox_auth.json`**（RaceBox 网页登录缓存）、**`ms-playwright/`**（RaceBox 云下载用的 Playwright Chromium，约百兆级）。
+
+- **`OPENLAP_DATA_DIR`**：设为绝对路径可强制指定应用数据根（测试、CI、自定义盘符）。
+- **升级自旧版**：若曾使用 `~/.openlap/` 下的配置/扫描缓存，或旧版 `%APPDATA%\OpenLap\racebox_auth.json`，在新数据根里还没有对应文件时，会**各自动迁移一次**（不删除旧文件）。
+- **命令行安装 Chromium（可选）**：若运行 `playwright install chromium`，请先在**同一终端**设置 `PLAYWRIGHT_BROWSERS_PATH` 指向 `<应用数据根>/ms-playwright`，以便与便携布局一致。**更简单**：直接使用应用内的 **Download Login Component**（Chromium 会落在上述目录）。
+
+---
+
 ### 4）先在 Settings 配置路径
 
 按需配置以下目录：
@@ -214,8 +233,9 @@ python tools/fetch_ffmpeg.py
 
 ```bash
 python -m pip install -e ".[racebox-download]"
-playwright install chromium
 ```
+
+安装 Playwright 自带 Chromium（二选一）：**推荐**直接使用应用内的 **Download Login Component**（会写入 `<仓库根>/.openlap/ms-playwright/`，与本节「便携」布局一致）。若你坚持在**独立终端**里跑 `playwright install chromium`，须先自行设置 `PLAYWRIGHT_BROWSERS_PATH` 指向该目录（可先 `mkdir .openlap`），例如 Windows cmd：`set PLAYWRIGHT_BROWSERS_PATH=%CD%\.openlap\ms-playwright`，再执行 `playwright install chromium`。
 
 ### 启动
 
@@ -223,7 +243,7 @@ playwright install chromium
 python main.py
 ```
 
-配置文件默认位于：`~/.openlap/config.json`
+配置文件默认位于：`<仓库根>/.openlap/config.json`。其它运行时写入项（缓存、RaceBox/Chromium、`Library/ffmpeg/` 便携布局等）均在该应用数据根下，参见上文「便携与本地数据目录」。
 
 ---
 
@@ -234,8 +254,10 @@ python main.py
 ```bash
 python tools/fetch_ffmpeg.py
 pip install pyinstaller
-pyinstaller OpenLap.spec --clean -y
+python tools/build_windows_portable.py
 ```
+
+`build_windows_portable.py` 会先执行 `pyinstaller OpenLap.spec`，再把 `third_party/ffmpeg/...` 里的 `ffmpeg.exe` / `ffprobe.exe` 复制到 **`dist/OpenLap/Library/ffmpeg/`**（与 `OpenLap.exe` 同级，不在 `_internal` 里）。若只运行 `pyinstaller` 而未执行复制步骤，打包版会找不到自带 FFmpeg。
 
 输出目录：`dist/OpenLap/`
 

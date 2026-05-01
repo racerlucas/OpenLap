@@ -137,9 +137,11 @@ class RaceBoxSource(DataSource):
     def __init__(self, auth_file: Optional[str] = None,
                  data_dir: str = "racebox_data"):
         if auth_file is None:
-            app_data = Path(os.environ.get("APPDATA", Path.home())) / "OpenLap"
-            app_data.mkdir(parents=True, exist_ok=True)
-            auth_file = str(app_data / "racebox_auth.json")
+            from openlap_paths import racebox_auth_file
+
+            p = racebox_auth_file()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            auth_file = str(p)
         self.auth_file = auth_file
         self.data_dir  = data_dir
         self._cookies: Optional[str] = None   # cached cookie header

@@ -1,22 +1,23 @@
 """
 PyInstaller runtime hook — fix PATH and Playwright browser location.
 
-1. Prepend _MEIPASS to PATH so bundled binaries (ffmpeg, ffprobe) are
-   found by subprocess calls that use bare command names.
+1. Prepend ``<exe_dir>/Library/ffmpeg`` then ``_MEIPASS`` to PATH so ffmpeg/ffprobe
+   (shipped beside the exe) and other bundled tools are found for bare command names.
 
-2. Set PLAYWRIGHT_BROWSERS_PATH to the standard %LOCALAPPDATA%\ms-playwright
-   location.  Without this, the bundled playwright driver defaults to looking
-   for Chromium inside _internal\playwright\driver\package\.local-browsers\,
-   which is never populated.
+2. Set PLAYWRIGHT_BROWSERS_PATH to ``<exe_dir>/ms-playwright`` so Chromium lives beside
+   the portable app (same as ``openlap_paths.playwright_browsers_dir()`` when frozen).
+   Without this, the bundled driver looks under _internal\\...\\.local-browsers\\, which
+   is never populated.
 """
 import os
 import sys
 
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-    os.environ['PATH'] = sys._MEIPASS + os.pathsep + os.environ.get('PATH', '')
-
-    local_app = os.environ.get('LOCALAPPDATA', os.path.expanduser('~'))
-    os.environ.setdefault(
-        'PLAYWRIGHT_BROWSERS_PATH',
-        os.path.join(local_app, 'ms-playwright'),
+    _exe_dir = os.path.dirname(sys.executable)
+    _portable_ff = os.path.join(_exe_dir, 'Library', 'ffmpeg')
+    os.environ['PATH'] = (
+        _portable_ff + os.pathsep + sys._MEIPASS + os.pathsep + os.environ.get('PATH', '')
     )
+
+    _pw_browsers = os.path.join(_exe_dir, 'ms-playwright')
+    os.environ.setdefault('PLAYWRIGHT_BROWSERS_PATH', _pw_browsers)

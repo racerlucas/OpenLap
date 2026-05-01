@@ -25,7 +25,9 @@ def _setup_logging() -> None:
 
     is_child_process = (mp.parent_process() is not None) or (mp.current_process().name != 'MainProcess')
 
-    log_dir = Path.home() / '.openlap' / 'logs'
+    from openlap_paths import logs_dir
+
+    log_dir = logs_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
     fmt = logging.Formatter('%(asctime)s %(levelname)-8s %(name)s — %(message)s')
     root = logging.getLogger()
@@ -65,6 +67,16 @@ def _setup_logging() -> None:
 
 
 _setup_logging()
+
+
+def _ensure_playwright_browsers_under_app_data() -> None:
+    """Install Playwright Chromium under ``app_data_dir()/ms-playwright`` (portable; not %LOCALAPPDATA%)."""
+    from openlap_paths import playwright_browsers_dir
+
+    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(playwright_browsers_dir()))
+
+
+_ensure_playwright_browsers_under_app_data()
 
 from opencv_ffmpeg_env import apply_ffmpeg_capture_thread_limit
 
