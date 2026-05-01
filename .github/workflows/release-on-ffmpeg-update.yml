@@ -1,5 +1,6 @@
 # When BtbN FFmpeg-Builds publishes a new "latest" win64 GPL zip (new GitHub release/asset ids),
-# bump _version.py patch (x.y.(z+1)), build the Windows portable folder, zip it, push commit + tag, create GitHub Release.
+# bump _version.py build segment (x.y.z → x.y.z.1; x.y.z.n → x.y.z.(n+1)),
+# build the Windows portable folder, zip it, push commit + tag, create GitHub Release.
 #
 # Schedule: daily 06:00 UTC (adjust cron as you like).
 # Manual: Actions → "Release on FFmpeg update" → Run workflow → optional "force" to rebuild even if pin matches.
