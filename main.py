@@ -82,6 +82,28 @@ from opencv_ffmpeg_env import apply_ffmpeg_capture_thread_limit
 
 apply_ffmpeg_capture_thread_limit()
 
+
+def _prefer_repo_staged_ffmpeg_in_dev() -> None:
+    """In dev, prefer repo-staged FFmpeg so behavior matches packaged builds.
+
+    This avoids accidental use of system/PATH ffmpeg builds with different
+    hardware acceleration support (NVENC/QSV) than our bundled/staged binaries.
+    """
+    if getattr(sys, 'frozen', False):
+        return
+    if sys.platform != 'win32':
+        return
+    root = Path(__file__).parent
+    ff = root / 'third_party' / 'ffmpeg' / 'win64' / 'bin' / 'ffmpeg.exe'
+    fp = root / 'third_party' / 'ffmpeg' / 'win64' / 'bin' / 'ffprobe.exe'
+    if ff.is_file():
+        os.environ.setdefault('FFMPEG_BIN', str(ff))
+    if fp.is_file():
+        os.environ.setdefault('FFPROBE_BIN', str(fp))
+
+
+_prefer_repo_staged_ffmpeg_in_dev()
+
 # ── Locate frontend assets ────────────────────────────────────────────────────
 # When running from source:  frontend/ is next to main.py
 # When bundled by PyInstaller: sys._MEIPASS contains extracted files

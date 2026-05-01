@@ -67,6 +67,22 @@
     _refreshItemList(items);
     _updateStartBtn(items);
 
+    // Background encoder probe done event (fires even if Export page isn't active)
+    // We only bind this listener when the page is mounted to avoid duplicate updates.
+    const _onProbeDone = (detail) => {
+      if (!detail) return;
+      if (detail.version) _ffmpegVersion = String(detail.version);
+      const a = detail.avail;
+      if (a && typeof a === 'object') {
+        _encAvail = {};
+        Object.keys(a).forEach(k => { _encAvail[String(k)] = !!a[k]; });
+      }
+      _syncEncoderFamilyOptions();
+      const msg = container.querySelector('#exp-enc-msg');
+      if (msg) msg.textContent = _ffmpegVersion ? `FFmpeg ${_ffmpegVersion}` : '';
+    };
+    _unlistenFns.push(API.on('encoder_probe_done', _onProbeDone));
+
     (async () => {
       try {
         const r = await API.checkEncoders();

@@ -9,6 +9,7 @@ Build pipeline:
 from __future__ import annotations
 
 import os
+import argparse
 import shutil
 import subprocess
 import sys
@@ -33,7 +34,24 @@ def main() -> int:
         print("[build_windows_portable] This helper is Windows-only.")
         return 2
 
-    extra = list(sys.argv[1:])
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument(
+        "--zip-only",
+        action="store_true",
+        help="Only keep the zip artifact (delete dist/OpenLap after zipping). Default behavior.",
+    )
+    ap.add_argument(
+        "--keep-dist",
+        action="store_true",
+        help="Keep dist/OpenLap folder after zipping (useful for debugging).",
+    )
+    args, extra = ap.parse_known_args(sys.argv[1:])
+
+    # Default is zip-only unless explicitly overridden.
+    keep_dist = bool(args.keep_dist)
+    if args.zip_only:
+        keep_dist = False
+
     r = subprocess.run(
         [sys.executable, "-m", "PyInstaller", "OpenLap.spec", "--clean", "-y", *extra],
         cwd=str(HERE),
@@ -67,9 +85,12 @@ def main() -> int:
     _zip_dir_flat(dist_dir, zip_name)
 
     # Remove the unpacked onedir so the build output is a single artifact.
-    # (If you want to keep it for debugging, set KEEP_DIST_DIR=1.)
-    keep = os.environ.get("KEEP_DIST_DIR", "").strip().lower() in ("1", "true", "yes")
-    if not keep:
+    # CLI flag wins; env var is kept for backward-compat.
+    if not keep_dist:
+        keep_env = os.environ.get("KEEP_DIST_DIR", "").strip().lower() in ("1", "true", "yes")
+        if keep_env:
+            keep_dist = True
+    if not keep_dist:
         shutil.rmtree(dist_dir, ignore_errors=True)
 
     print(f"[build_windows_portable] Wrote {zip_name}")

@@ -978,6 +978,7 @@ def render_lap(
         if _ov_proc.returncode != 0:
             err = b''.join(_ov_stderr).decode(errors='replace')
             logger.error('FFmpeg ProRes export failed:\n%s', err)
+            _safe_remove(out_path)
             raise VideoMuxError(err[-600:])
         if _cancelled():
             _safe_remove(out_path)
@@ -1018,8 +1019,8 @@ def render_lap(
                 _safe_remove(tmp_raw)
                 _safe_remove(out_path)
                 raise ExportCancelledError('cancelled')
+            # On failure, remove partial outputs so users don't end up with broken videos.
             log(f"  ✗ Mux failed: {e}")
-            fallback = os.path.splitext(out_path)[0] + '_raw.avi'
-            if os.path.exists(tmp_raw):
-                os.rename(tmp_raw, fallback)
-            log(f"  Raw saved: {fallback}")
+            _safe_remove(tmp_raw)
+            _safe_remove(out_path)
+            raise

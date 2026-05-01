@@ -173,6 +173,57 @@ class WebviewAPI:
         self._decode_lock = threading.Lock()
         # Cache FFmpeg nullsrc encoder probes (~10 calls); refresh periodically.
         self._encoder_probe_cache: Optional[tuple] = None  # (monotonic_ts, dict[str, bool])
+        self._encoder_probe_bg_started = False
+        self._start_encoder_probe_bg()
+
+
+    def _start_encoder_probe_bg(self) -> None:
+        """Kick off a background FFmpeg encoder probe so UI doesn't block on first open."""
+        if self._encoder_probe_bg_started:
+            return
+        self._encoder_probe_bg_started = True
+
+        def _run():
+            import time
+            from datetime import datetime, timezone
+            try:
+                from ffmpeg_paths import get_ffmpeg_bin
+                from utils import _run as _run_ff
+                from export_encoder import probe_encoder_availability
+
+                ffmpeg_bin = get_ffmpeg_bin()
+                ffmpeg_version = 'unknown'
+                try:
+                    r = _run_ff([ffmpeg_bin, '-version'], capture_output=True, text=True, timeout=10)
+                    first = (r.stdout or '').splitlines()[0] if r.stdout else ''
+                    ffmpeg_version = first.split('version')[-1].strip().split(' ')[0] if 'version' in first else 'unknown'
+                except Exception:
+                    pass
+
+                avail = probe_encoder_availability()
+                # Update in-memory cache immediately
+                self._encoder_probe_cache = (time.monotonic(), avail)
+
+                # Persist for next startup (fast UI)
+                try:
+                    self._config.encoder_probe_cache = {
+                        'ts': datetime.now(timezone.utc).isoformat(),
+                        'ffmpeg_bin': str(ffmpeg_bin),
+                        'ffmpeg_version': str(ffmpeg_version),
+                        'avail': dict(avail),
+                    }
+                    self._config.save()
+                except Exception:
+                    pass
+
+                # Push event to frontend so Export page updates without refresh
+                self._push('encoder_probe_done', version=ffmpeg_version, avail=avail)
+            except Exception:
+                # Never crash app on probe failures
+                return
+
+        t = threading.Thread(target=_run, daemon=True, name='encoder-probe')
+        t.start()
 
     # ── Called by main.py once the window is ready ────────────────────────────
     def set_window(self, window: webview.Window) -> None:
@@ -488,6 +539,16 @@ class WebviewAPI:
         c = getattr(self, '_encoder_probe_cache', None)
         if c and (now - c[0]) < 90.0:
             return c[1]
+        # Warm start: if config has a cached probe, use it immediately.
+        try:
+            cached = getattr(self._config, 'encoder_probe_cache', None)
+            if isinstance(cached, dict):
+                avail = cached.get('avail')
+                if isinstance(avail, dict) and avail:
+                    self._encoder_probe_cache = (now, dict(avail))
+                    return dict(avail)
+        except Exception:
+            pass
         from export_encoder import probe_encoder_availability
         d = probe_encoder_availability()
         self._encoder_probe_cache = (now, d)

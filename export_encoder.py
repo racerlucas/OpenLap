@@ -29,11 +29,18 @@ def _win_flags() -> dict:
 def _run_probe(enc: str) -> bool:
     ffmpeg_bin = _ffmpeg_bin()
     try:
+        # NOTE: Some hardware encoders (notably NVENC HEVC on certain driver stacks)
+        # can fail unless the input pixel format is explicitly set.
+        # Keep this probe fast and deterministic: generate a tiny yuv420p stream
+        # and encode a few frames to null.
         r = subprocess.run(
             [
                 ffmpeg_bin, '-hide_banner', '-loglevel', 'error',
-                '-f', 'lavfi', '-i', 'nullsrc=s=64x64:d=0.05',
-                '-c:v', enc, '-f', 'null', '-',
+                '-f', 'lavfi', '-i', 'nullsrc=s=128x128:d=0.10',
+                '-pix_fmt', 'yuv420p',
+                '-frames:v', '3',
+                '-c:v', enc,
+                '-f', 'null', '-',
             ],
             capture_output=True,
             timeout=12,
