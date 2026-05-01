@@ -261,6 +261,17 @@ python tools/build_windows_portable.py
 
 输出目录：`dist/OpenLap/`
 
+### GitHub Actions：FFmpeg 更新后自动发版
+
+仓库已配置 [`.github/workflows/release-on-ffmpeg-update.yml`](.github/workflows/release-on-ffmpeg-update.yml)（默认每天 UTC 06:00 跑一次，可在文件里改 `cron`）：
+
+1. 查询 [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) 的 `releases/latest`，用 **GitHub 分配的稳定 id**（`release_id|asset_id`）与 [`.github/ffmpeg-release-pin.txt`](.github/ffmpeg-release-pin.txt) 对比；若未变则跳过。
+2. 若有新包：将 `_version.py` 的 **patch** 自增（`x.y.z` → `x.y.(z+1)`），拉取 FFmpeg、执行 `build_windows_portable.py`、打 zip、提交版本与 pin、推送，并创建带附件的 **GitHub Release**；说明正文为：  
+   `ffmpeg更新到 <zip 资源名>（<ffmpeg -version 首行>）`。
+3. 在 Actions 里可 **手动 Run workflow**，勾选 **force** 可在 pin 未变时仍强制打包发版（同样会 patch+1，请慎用）。
+
+**注意**：默认分支若开启「必须通过 PR / 禁止直接 push」，需为 `github-actions[bot]` 放宽规则或使用带 `repo` 权限的 PAT 写入分支；打包还依赖 `OpenLap.spec` 里声明的 DLL 等文件在仓库中已存在（与本地打包前提一致）。
+
 ---
 
 ## 许可证

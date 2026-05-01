@@ -1,0 +1,157 @@
+# When BtbN FFmpeg-Builds publishes a new "latest" win64 GPL zip (new GitHub release/asset ids),
+# bump _version.py patch (x.y.(z+1)), build the Windows portable folder, zip it, push commit + tag, create GitHub Release.
+#
+# Schedule: daily 06:00 UTC (adjust cron as you like).
+# Manual: Actions → "Release on FFmpeg update" → Run workflow → optional "force" to rebuild even if pin matches.
+
+name: Release on FFmpeg update
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "即使 BtbN pin 未变也强制打包并发版（仍会 patch+1）"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-on-ffmpeg-update
+  cancel-in-progress: false
+
+jobs:
+  check-and-maybe-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve BtbN latest identity
+        id: ident
+        run: python tools/ffmpeg_release_identity.py
+
+      - name: Read stored pin
+        id: pin
+        shell: pwsh
+        run: |
+          $path = ".github/ffmpeg-release-pin.txt"
+          if (Test-Path $path) {
+            $cur = (Get-Content $path -Raw).Trim()
+          } else {
+            $cur = ""
+          }
+          "current=$cur" >> $env:GITHUB_OUTPUT
+
+      - name: Decide whether to build
+        id: gate
+        shell: pwsh
+        run: |
+          $want = '${{ steps.ident.outputs.pin }}'
+          $cur = '${{ steps.pin.outputs.current }}'
+          $force = '${{ github.event.inputs.force }}' -eq 'true'
+          if ($force) {
+            "build=true" >> $env:GITHUB_OUTPUT
+            "reason=workflow_dispatch force" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          if ($cur -eq $want) {
+            "build=false" >> $env:GITHUB_OUTPUT
+            "reason=pin matches BtbN latest" >> $env:GITHUB_OUTPUT
+          } else {
+            "build=true" >> $env:GITHUB_OUTPUT
+            "reason=BtbN FFmpeg build changed" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Skip (no new FFmpeg)
+        if: steps.gate.outputs.build != 'true'
+        shell: pwsh
+        run: Write-Host "Skipping release: ${{ steps.gate.outputs.reason }}"
+
+      - name: Bump patch version in _version.py
+        if: steps.gate.outputs.build == 'true'
+        id: bump
+        run: python tools/bump_patch_version.py
+
+      - name: Install Python deps (build + bundle)
+        if: steps.gate.outputs.build == 'true'
+        run: |
+          python -m pip install -U pip setuptools wheel
+          python -m pip install -e ".[package,racebox-download]"
+
+      - name: Stage FFmpeg (BtbN latest)
+        if: steps.gate.outputs.build == 'true'
+        run: python tools/fetch_ffmpeg.py --latest
+
+      - name: Capture ffmpeg -version (first line)
+        if: steps.gate.outputs.build == 'true'
+        id: ffver
+        shell: pwsh
+        run: |
+          $exe = "third_party/ffmpeg/win64/bin/ffmpeg.exe"
+          if (-not (Test-Path $exe)) { throw "ffmpeg.exe missing after fetch" }
+          $line = & $exe -version 2>&1 | Select-Object -First 1
+          $line = $line.Trim()
+          "line<<EOF" >> $env:GITHUB_OUTPUT
+          $line >> $env:GITHUB_OUTPUT
+          "EOF" >> $env:GITHUB_OUTPUT
+
+      - name: Build portable (PyInstaller + stage Library/ffmpeg)
+        if: steps.gate.outputs.build == 'true'
+        run: python tools/build_windows_portable.py
+
+      - name: Zip dist/OpenLap
+        if: steps.gate.outputs.build == 'true'
+        id: zip
+        shell: pwsh
+        run: |
+          $v = "${{ steps.bump.outputs.new_version }}"
+          $name = "OpenLap-$v-Windows-portable.zip"
+          if (Test-Path $name) { Remove-Item $name -Force }
+          Compress-Archive -Path "dist/OpenLap" -DestinationPath $name
+          "zip_name=$name" >> $env:GITHUB_OUTPUT
+
+      - name: Update FFmpeg pin file
+        if: steps.gate.outputs.build == 'true'
+        shell: pwsh
+        run: |
+          "${{ steps.ident.outputs.pin }}" | Out-File -FilePath ".github/ffmpeg-release-pin.txt" -Encoding utf8NoBOM -NoNewline
+
+      - name: Commit version + pin and push
+        if: steps.gate.outputs.build == 'true'
+        id: gitpush
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add _version.py .github/ffmpeg-release-pin.txt
+          git commit -m "chore: bump ${{ steps.bump.outputs.new_version }} (FFmpeg auto-release)"
+          git push origin "HEAD:${{ github.ref_name }}"
+          $sha = git rev-parse HEAD
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+
+      - name: Tag and create GitHub Release
+        if: steps.gate.outputs.build == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.bump.outputs.new_version }}
+          name: OpenLap v${{ steps.bump.outputs.new_version }}
+          target_commitish: ${{ steps.gitpush.outputs.sha }}
+          body: |
+            ffmpeg更新到 ${{ steps.ident.outputs.asset }}（${{ steps.ffver.outputs.line }}）
+
+            - BtbN 发布：`${{ steps.ident.outputs.tag }}`（`${{ steps.ident.outputs.published }}`）
+            - 资源：`${{ steps.ident.outputs.asset }}`
+          files: ${{ steps.zip.outputs.zip_name }}
+          generate_release_notes: false

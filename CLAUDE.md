@@ -17,6 +17,9 @@ python -m pytest tests/ -k "test_delta" -q              # single test by name
 npm run test:run           # one-shot
 npm test                   # watch mode
 
+# CI: scheduled FFmpeg check → bump patch version + Windows portable zip release
+#   (.github/workflows/release-on-ffmpeg-update.yml, pin in .github/ffmpeg-release-pin.txt)
+
 # Build Windows portable folder (onedir → dist/OpenLap/, not a single onefile exe)
 pip install pyinstaller
 # ``OpenLap.spec`` (on Windows) auto-runs ``tools/fetch_ffmpeg.py --latest`` before Analysis —

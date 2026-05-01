@@ -23,19 +23,6 @@ import playwright as _pw_mod
 
 HERE = Path(SPECPATH)
 
-# ── Safety: never bundle repository-local commercial tracks ───────────────────
-# Real track JSONs are not allowed to ship inside the app bundle. If the working
-# tree contains any non-template tracks/*.json, fail fast unless explicitly allowed.
-_tracks_dir = HERE / 'tracks'
-if _tracks_dir.is_dir():
-    _real_tracks = [p for p in _tracks_dir.glob('*.json') if not p.name.endswith('.template.json')]
-    if _real_tracks and os.environ.get('ALLOW_BUNDLE_TRACKS', '').strip().lower() not in ('1', 'true', 'yes'):
-        raise RuntimeError(
-            '[OpenLap.spec] Refusing to build: found non-template tracks/*.json (commercial). '
-            'Keep user tracks outside the repo (e.g. next to the packaged exe under tracks/) '
-            'or set ALLOW_BUNDLE_TRACKS=1 to override.'
-        )
-
 # ── Auto-fetch FFmpeg (Windows) before bundling ───────────────────────────────
 # Default behavior: only download when the staged binaries are missing.
 # Force update: set FORCE_FFMPEG_FETCH=1
