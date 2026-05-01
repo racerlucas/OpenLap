@@ -52,6 +52,12 @@
       ${_folderRow('VBOX',        'vbox_path',    cfg.vbox_path,    'Racelogic VBOX .vbo 文件目录')}
     </section>
 
+    <!-- Video source folder (used for auto matching) -->
+    <section class="settings-section">
+      <div class="section-title">视频源目录</div>
+      ${_folderRow('视频目录', 'video_path',  cfg.video_path,  '用于自动匹配视频（可与遥测目录不同）。导出输出文件夹不在此配置，每次导出单独选择。')}
+    </section>
+
     <!-- RaceBox cloud -->
     <section class="settings-section">
       <div class="section-title">RaceBox 云端</div>

@@ -419,7 +419,7 @@
 
     // Session info
     const vidPaths    = s.video_paths || [];
-    const hasVid      = s.matched && vidPaths.length > 0;
+    const hasVid      = vidPaths.length > 0;
     const trackOverride  = _config?.session_info?.[s.csv_path]?.info_track;
     const effectiveTrack = trackOverride || m.track || '';
     const detailLaps = m.laps || s.laps || '—';
@@ -476,12 +476,23 @@ ${s.needs_conversion ? `
 </div>` : ''}
 
 <!-- Video align -->
-${hasVid ? renderAlignCard(s, vidPaths, effOff) : `
+${hasVid ? `
+${renderAlignCard(s, vidPaths, effOff)}
+<div class="dr-card" style="margin-top:10px">
+  <div class="dr-card-title">视频</div>
+  <div class="dr-actions" style="margin-top:8px">
+    <button class="btn btn-secondary btn-sm" id="dr-assign-vid-btn">选择/更换视频（可多选）…</button>
+    <button class="btn btn-secondary btn-sm" id="dr-clear-vid-btn" style="opacity:0.75">清除绑定</button>
+    <span id="dr-assign-vid-msg" class="status-msg"></span>
+  </div>
+</div>
+` : `
 <div class="dr-card">
   <div class="dr-card-title">视频</div>
   <div class="dr-hint" style="color:var(--warn)">未找到匹配视频。</div>
   <div class="dr-actions" style="margin-top:8px">
-    <button class="btn btn-secondary btn-sm" id="dr-assign-vid-btn">选择视频（可多选）…</button>
+    <button class="btn btn-secondary btn-sm" id="dr-assign-vid-btn">选择/更换视频（可多选）…</button>
+    <button class="btn btn-secondary btn-sm" id="dr-clear-vid-btn" style="opacity:0.75">清除绑定</button>
     <span id="dr-assign-vid-msg" class="status-msg"></span>
   </div>
 </div>`}
@@ -842,10 +853,12 @@ ${renderLapTagCard(s)}
       }
     });
 
-    // Manual video assignment (one or more clips; backend orders by recording time for export)
-    pane.querySelector('#dr-assign-vid-btn')?.addEventListener('click', async () => {
+    const _bindAssign = () => {
       const btn = pane.querySelector('#dr-assign-vid-btn');
       const msg = pane.querySelector('#dr-assign-vid-msg');
+      if (!btn) return;
+      // Manual video assignment (one or more clips; backend orders by recording time for export)
+      btn.addEventListener('click', async () => {
       btn.disabled = true;
       const filter = ['视频文件 (*.mp4;*.mov;*.avi;*.mkv;*.MP4;*.MOV)'];
       let paths = await API.openFilesDialog(filter).catch(() => []);
@@ -875,6 +888,28 @@ ${renderLapTagCard(s)}
       } catch (e) {
         if (msg) { msg.textContent = String(e); msg.className = 'status-msg status-err'; }
         btn.disabled = false;
+      }
+      });
+    };
+    _bindAssign();
+
+    // Clear manual binding
+    pane.querySelector('#dr-clear-vid-btn')?.addEventListener('click', async () => {
+      const msg = pane.querySelector('#dr-assign-vid-msg');
+      try {
+        await API.assignVideos(s.csv_path, []);
+        s.video_paths = [];
+        s.matched = false;
+        const prev = State.get('previewSession');
+        if (prev?.csv_path === s.csv_path) {
+          State.set('previewSession', { ...prev, video_paths: [], sync_offset: s.sync_offset ?? 0 });
+        }
+        await API.saveSessionsCache(_sessions).catch(() => {});
+        if (msg) { msg.textContent = '已清除绑定。'; msg.className = 'status-msg status-dim'; }
+        renderRight();
+        renderLeft();
+      } catch (e) {
+        if (msg) { msg.textContent = String(e); msg.className = 'status-msg status-err'; }
       }
     });
 

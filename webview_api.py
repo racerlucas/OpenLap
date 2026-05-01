@@ -57,8 +57,9 @@ def _session_info_manual_video_paths(si: object) -> Optional[List[str]]:
                 ap = str(Path(p.strip()).resolve())
             except OSError:
                 continue
-            if os.path.isfile(ap):
-                out.append(ap)
+            # Keep the path even if the file is temporarily missing (e.g. user is
+            # replacing clips in-place). Export will validate existence when used.
+            out.append(ap)
     if out:
         return out
     legacy = si.get('_video_override')
@@ -67,8 +68,7 @@ def _session_info_manual_video_paths(si: object) -> Optional[List[str]]:
             ap = str(Path(legacy.strip()).resolve())
         except OSError:
             return None
-        if os.path.isfile(ap):
-            return [ap]
+        return [ap]
     return None
 
 
