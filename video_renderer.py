@@ -75,6 +75,9 @@ from exceptions import VideoConcatError, VideoMuxError, LapOutOfRangeError
 
 _N_SECTORS = 3  # number of track sectors used for delta-time display
 
+# Map current-position dot: EMA on lat/lon (matches ``editor.js`` ``buildLiveData`` map branch, a=0.34).
+_MAP_DOT_EMA_ALPHA = 0.34
+
 # ── FFmpeg helpers ─────────────────────────────────────────────────────────────
 
 def detect_encoder() -> str:
@@ -119,6 +122,23 @@ def concat_videos(input_files: List[str], output: str) -> None:
                 raise VideoConcatError(err[-600:])
     finally:
         os.unlink(concat_file)
+
+
+def _export_ffmpeg_thread_flags() -> List[str]:
+    """FFmpeg global threading hint for filters + encoders (all codecs)."""
+    return ['-threads', '0']
+
+
+def _export_output_mux_tail(out_ext: str, encoder: str) -> List[str]:
+    """MP4/M4V tail flags shared by file-mux and BGR-pipe export (encoder-aware)."""
+    if out_ext not in ('.mp4', '.m4v'):
+        return []
+    enc_l = (encoder or '').lower()
+    tail: List[str] = ['-movflags', '+faststart']
+    # Apple / QuickTime-friendly HEVC in MP4 (Shutter-style hvc1 tag).
+    if 'hevc' in enc_l or enc_l == 'libx265':
+        tail.extend(['-tag:v', 'hvc1'])
+    return tail
 
 
 class MultiCap:
@@ -389,15 +409,14 @@ def mux_audio(raw_video: str, audio_source: str,
         meta_args = ['-metadata', f'creation_time={ct}']
 
     out_ext = os.path.splitext(output)[1].lower()
-    tail: list[str] = []
-    if out_ext in ('.mp4', '.m4v'):
-        tail = ['-movflags', '+faststart']
+    tail = _export_output_mux_tail(out_ext, encoder)
 
     def _build_cmd(audio_copy: bool) -> List[str]:
         ac = (['-c:a', 'copy'] if audio_copy else
               ['-c:a', 'aac', '-b:a', f'{ab_kbps}k'])
-        return (['ffmpeg', '-y', '-hide_banner',
-                 '-i', raw_video,
+        return (['ffmpeg', '-y', '-hide_banner']
+                + _export_ffmpeg_thread_flags()
+                + ['-i', raw_video,
                  '-ss', f'{audio_start:.6f}', '-i', audio_source,
                  '-map', '0:v', '-map', '1:a?',
                  '-vf', vf,
@@ -437,7 +456,9 @@ def _build_bgr_pipe_mux_cmd(
     """FFmpeg argv: BGR rawvideo on stdin + trimmed audio from *video_path* → *output*.
 
     Same filter / rate-control / metadata as :func:`mux_audio`, without the MJPEG
-    intermediate file (encode runs while frames are produced).
+    intermediate file (encode runs while frames are produced). Any *encoder* name
+    FFmpeg accepts after ``-vf`` ``format=yuv420p`` works (CPU x264/x265/SVT-AV1,
+    NVENC/AMF/QSV/VideoToolbox, etc.).
     """
     eo = encode_options if isinstance(encode_options, dict) else {}
     vf = _build_export_vf_chain(eo)
@@ -451,15 +472,14 @@ def _build_bgr_pipe_mux_cmd(
         meta_args = ['-metadata', f'creation_time={ct}']
 
     out_ext = os.path.splitext(output)[1].lower()
-    tail: list[str] = []
-    if out_ext in ('.mp4', '.m4v'):
-        tail = ['-movflags', '+faststart']
+    tail = _export_output_mux_tail(out_ext, encoder)
 
     ac = (['-c:a', 'copy'] if audio_copy else
           ['-c:a', 'aac', '-b:a', f'{ab_kbps}k'])
     fps_s = f'{fps:.6f}'.rstrip('0').rstrip('.') if fps else '30'
-    base = (['ffmpeg', '-y', '-hide_banner',
-             '-f', 'rawvideo', '-pix_fmt', 'bgr24',
+    base = (['ffmpeg', '-y', '-hide_banner']
+            + _export_ffmpeg_thread_flags()
+            + ['-f', 'rawvideo', '-pix_fmt', 'bgr24',
              '-s', f'{int(vw)}x{int(vh)}', '-r', fps_s,
              '-thread_queue_size', '512',
              '-i', 'pipe:0',
@@ -968,6 +988,11 @@ def render_lap(
     frame_idx = f_start
     processed = 0
 
+    # GPS dot smoothing for map overlay (same recipe as editor preview).
+    ema_map_lat: Optional[float] = None
+    ema_map_lon: Optional[float] = None
+    ema_map_lap: Optional[int] = None
+
     pool = Pool(n_workers) if n_workers > 1 else None
     cancelled = False
     try:
@@ -1061,6 +1086,22 @@ def render_lap(
                         delta_time=delta_val,
                         lap_info=_li,
                     )
+                    if show_map:
+                        rla = float(row.get('lat', float('nan')))
+                        rlo = float(row.get('lon', float('nan')))
+                        if math.isfinite(rla) and math.isfinite(rlo):
+                            lap_n = int(getattr(pt, 'lap', 0) or 0)
+                            if ema_map_lap != lap_n:
+                                ema_map_lap = lap_n
+                                ema_map_lat, ema_map_lon = rla, rlo
+                            elif ema_map_lat is not None and ema_map_lon is not None:
+                                a = _MAP_DOT_EMA_ALPHA
+                                ema_map_lat += a * (rla - ema_map_lat)
+                                ema_map_lon += a * (rlo - ema_map_lon)
+                            else:
+                                ema_map_lat, ema_map_lon = rla, rlo
+                            row['lat'] = float(ema_map_lat)
+                            row['lon'] = float(ema_map_lon)
                     history_buf.append(row)
 
                 # ── Map nearest-point (vectorised numpy, one call per frame) ───
