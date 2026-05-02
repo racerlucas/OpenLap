@@ -2,9 +2,17 @@
 """Build Windows portable onedir and create a zip artifact.
 
 Build pipeline:
-- Run PyInstaller using ``OpenLap.spec`` (onedir: dist/OpenLap/)
-- Stage FFmpeg into ``dist/OpenLap/Library/ffmpeg/``
-- Zip the whole onedir folder into one file for GitHub Releases
+- Run PyInstaller using ``OpenLap.spec`` (onedir: ``<distpath>/OpenLap/``; default ``dist/OpenLap/``)
+- Stage FFmpeg into ``<distpath>/OpenLap/Library/ffmpeg/``
+- Zip the whole onedir folder into one file under ``dist/OpenLap_<version>.zip``
+
+If the repository is on a UNC/SMB path, this script defaults ``--distpath`` / ``--workpath``
+to ``%%LOCALAPPDATA%%\\OpenLap\\pyinstaller_builds\\…`` so PyInstaller's ``--clean`` step
+does not try to deep-delete trees on the network share (often WinError 5 / 87).
+
+With ``--keep-dist``, if the onedir was built under that local ``--distpath``, the script
+mirrors it to ``<repo>/dist/OpenLap/`` after zipping so the unpacked folder exists on the
+share (PyInstaller never wrote there directly).
 """
 from __future__ import annotations
 
@@ -13,10 +21,22 @@ import argparse
 import shutil
 import subprocess
 import sys
+import tempfile
+from datetime import datetime
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 HERE = Path(__file__).resolve().parent.parent
+
+
+def _is_unc(p: Path) -> bool:
+    s = str(p)
+    return s.startswith("\\\\") or s.startswith("//")
+
+
+def _default_local_build_root() -> Path:
+    base = Path(os.environ.get("LOCALAPPDATA") or os.environ.get("TEMP") or tempfile.gettempdir())
+    return base / "OpenLap" / "pyinstaller_builds"
 
 
 def _zip_dir_flat(src_dir: Path, zip_path: Path) -> None:
@@ -38,12 +58,32 @@ def main() -> int:
     ap.add_argument(
         "--zip-only",
         action="store_true",
-        help="Only keep the zip artifact (delete dist/OpenLap after zipping). Default behavior.",
+        help="Only keep the zip artifact (delete unpacked onedir after zipping). Default behavior.",
     )
     ap.add_argument(
         "--keep-dist",
         action="store_true",
-        help="Keep dist/OpenLap folder after zipping (useful for debugging).",
+        help=(
+            "After a successful zip, keep the unpacked onedir. "
+            "If PyInstaller output is under repo dist/OpenLap/, it stays there. "
+            "If output is on another drive (e.g. UNC auto-local distpath), copy it to repo dist/OpenLap/ "
+            "(then remove the local staging copy). Does not disable PyInstaller --clean."
+        ),
+    )
+    ap.add_argument(
+        "--distpath",
+        default="",
+        help="PyInstaller --distpath (parent of OpenLap/). Default: repo/dist, or %%LOCALAPPDATA%% when repo is on UNC.",
+    )
+    ap.add_argument(
+        "--workpath",
+        default="",
+        help="PyInstaller --workpath. Default: repo/build, or next to --distpath when repo is on UNC.",
+    )
+    ap.add_argument(
+        "--no-local-unc",
+        action="store_true",
+        help="Do not auto-redirect dist/work to a local drive when the repo lives on UNC/SMB.",
     )
     args, extra = ap.parse_known_args(sys.argv[1:])
 
@@ -52,19 +92,43 @@ def main() -> int:
     if args.zip_only:
         keep_dist = False
 
-    r = subprocess.run(
-        [sys.executable, "-m", "PyInstaller", "OpenLap.spec", "--clean", "-y", *extra],
-        cwd=str(HERE),
-    )
+    distpath = (args.distpath or "").strip()
+    workpath = (args.workpath or "").strip()
+
+    # PyInstaller --clean uses shutil.rmtree on the onedir; deep trees on UNC/SMB often fail (WinError 5 / 87).
+    use_local_unc = (not args.no_local_unc) and _is_unc(HERE)
+    if use_local_unc and not distpath:
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        distpath = str(_default_local_build_root() / f"dist-{stamp}")
+    if use_local_unc and not workpath:
+        workpath = str(Path(distpath).parent / f"work-{Path(distpath).name}")
+
+    if use_local_unc and (distpath or workpath):
+        print(
+            "[build_windows_portable] Repo on UNC/SMB: using local PyInstaller paths "
+            f"(distpath={distpath!s}, workpath={workpath!s}). "
+            "Zip still goes to repo dist/. With --keep-dist, onedir is copied to repo dist/OpenLap/ after zip.",
+        )
+
+    pyi_cmd = [sys.executable, "-m", "PyInstaller", "OpenLap.spec", "--clean", "-y", *extra]
+    if distpath:
+        pyi_cmd += ["--distpath", str(Path(distpath).resolve())]
+    if workpath:
+        pyi_cmd += ["--workpath", str(Path(workpath).resolve())]
+
+    r = subprocess.run(pyi_cmd, cwd=str(HERE))
     if r.returncode != 0:
         return r.returncode
 
-    r2 = subprocess.call([sys.executable, str(HERE / "tools" / "stage_dist_library_ffmpeg.py")], cwd=str(HERE))
+    dist_dir = Path(distpath).resolve() / "OpenLap" if distpath else (HERE / "dist" / "OpenLap")
+    r2 = subprocess.call(
+        [sys.executable, str(HERE / "tools" / "stage_dist_library_ffmpeg.py"), str(dist_dir)],
+        cwd=str(HERE),
+    )
     if r2 != 0:
         return int(r2)
 
     # Create one zip artifact in dist/: OpenLap_<version>.zip
-    dist_dir = HERE / "dist" / "OpenLap"
     if not dist_dir.is_dir():
         print(f"[build_windows_portable] Missing dist folder: {dist_dir}")
         return 1
@@ -84,14 +148,31 @@ def main() -> int:
 
     _zip_dir_flat(dist_dir, zip_name)
 
-    # Remove the unpacked onedir so the build output is a single artifact.
+    # Remove or relocate the unpacked onedir (default: zip-only).
     # CLI flag wins; env var is kept for backward-compat.
     if not keep_dist:
         keep_env = os.environ.get("KEEP_DIST_DIR", "").strip().lower() in ("1", "true", "yes")
         if keep_env:
             keep_dist = True
+
+    repo_dist_openlap = HERE / "dist" / "OpenLap"
     if not keep_dist:
         shutil.rmtree(dist_dir, ignore_errors=True)
+    elif dist_dir.resolve() != repo_dist_openlap.resolve():
+        # UNC (or custom --distpath): user expects repo dist/OpenLap/ — mirror from local staging.
+        repo_dist_openlap.parent.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(repo_dist_openlap, ignore_errors=True)
+        try:
+            shutil.copytree(dist_dir, repo_dist_openlap, symlinks=False, dirs_exist_ok=False)
+        except OSError as exc:
+            print(
+                f"[build_windows_portable] Warning: could not copy onedir to {repo_dist_openlap}: {exc}\n"
+                f"  Left build output at: {dist_dir}",
+                file=sys.stderr,
+            )
+        else:
+            shutil.rmtree(dist_dir, ignore_errors=True)
+            print(f"[build_windows_portable] Mirrored onedir to {repo_dist_openlap}")
 
     print(f"[build_windows_portable] Wrote {zip_name}")
     return 0

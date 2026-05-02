@@ -28,6 +28,9 @@ pip install pyinstaller
 # Manual fetch: ``python tools/fetch_ffmpeg.py`` (latest) or ``python tools/fetch_ffmpeg.py --stable`` (Gyan).
 python tools/build_windows_portable.py
 # (Equivalent: ``pyinstaller OpenLap.spec --clean -y`` then ``python tools/stage_dist_library_ffmpeg.py``.)
+# Repo on UNC/SMB: ``build_windows_portable.py`` defaults ``--distpath`` / ``--workpath`` under ``%LOCALAPPDATA%``
+# so ``--clean`` can delete the old onedir reliably; or pass e.g. ``--distpath C:\tmp\ol-dist --workpath C:\tmp\ol-build``.
+# ``--keep-dist`` then copies the local onedir to ``dist/OpenLap/`` on the share after zipping.
 # Dev: config/scan cache/tracks/caches under ``<repo>/.openlap/`` (gitignored). Frozen: next to OpenLap.exe.
 # FFmpeg/ffprobe are copied to dist/OpenLap/Library/ffmpeg/ at build time (not inside _internal/).
 ```
