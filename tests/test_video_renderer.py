@@ -152,6 +152,34 @@ class TestBuildVideoEncodeFlags:
         assert '-b:v' in f
         assert '-minrate' in joined
 
+    def test_bgr_pipe_mux_cmd_raw_input_and_encoder(self):
+        from datetime import datetime, timezone
+
+        from video_renderer import _build_bgr_pipe_mux_cmd
+
+        cmd = _build_bgr_pipe_mux_cmd(
+            '/videos/src.mp4',
+            '/out/x.mp4',
+            'hevc_nvenc',
+            21,
+            3840,
+            2160,
+            59.94,
+            12.5,
+            True,
+            {'export_rate_mode': 'cq'},
+            datetime(2025, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+            True,
+        )
+        s = ' '.join(cmd)
+        assert 'pipe:0' in cmd
+        assert 'bgr24' in s
+        assert '3840x2160' in s
+        assert '59.94' in s or '59.939999' in s
+        assert 'hevc_nvenc' in cmd
+        assert '-c:a' in cmd and 'copy' in cmd
+        assert '-progress' in cmd
+
     def test_vbr_nvenc_explicit_bitrate_skips_cq(self):
         from video_renderer import _build_video_encode_flags
 

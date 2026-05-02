@@ -420,6 +420,143 @@ def mux_audio(raw_video: str, audio_source: str,
         _run_attempt(False)
 
 
+def _build_bgr_pipe_mux_cmd(
+    video_path: str,
+    output: str,
+    encoder: str,
+    crf: int,
+    vw: int,
+    vh: int,
+    fps: float,
+    audio_start: float,
+    audio_copy: bool,
+    encode_options: Optional[dict],
+    creation_time_utc: Optional[datetime],
+    progress_pipe: bool,
+) -> List[str]:
+    """FFmpeg argv: BGR rawvideo on stdin + trimmed audio from *video_path* → *output*.
+
+    Same filter / rate-control / metadata as :func:`mux_audio`, without the MJPEG
+    intermediate file (encode runs while frames are produced).
+    """
+    eo = encode_options if isinstance(encode_options, dict) else {}
+    vf = _build_export_vf_chain(eo)
+    vflags = _build_video_encode_flags(encoder, crf, eo)
+    _ab_cfg = int(eo.get('export_audio_bitrate_kbps', 0) or 0)
+    ab_kbps = max(32, min(320, _ab_cfg)) if _ab_cfg > 0 else 192
+
+    meta_args: list = []
+    if creation_time_utc is not None:
+        ct = creation_time_utc.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000000Z')
+        meta_args = ['-metadata', f'creation_time={ct}']
+
+    out_ext = os.path.splitext(output)[1].lower()
+    tail: list[str] = []
+    if out_ext in ('.mp4', '.m4v'):
+        tail = ['-movflags', '+faststart']
+
+    ac = (['-c:a', 'copy'] if audio_copy else
+          ['-c:a', 'aac', '-b:a', f'{ab_kbps}k'])
+    fps_s = f'{fps:.6f}'.rstrip('0').rstrip('.') if fps else '30'
+    base = (['ffmpeg', '-y', '-hide_banner',
+             '-f', 'rawvideo', '-pix_fmt', 'bgr24',
+             '-s', f'{int(vw)}x{int(vh)}', '-r', fps_s,
+             '-thread_queue_size', '512',
+             '-i', 'pipe:0',
+             '-ss', f'{audio_start:.6f}', '-i', video_path,
+             '-map', '0:v', '-map', '1:a?',
+             '-vf', vf,
+             '-c:v', encoder] + vflags + ac + ['-shortest']
+            + meta_args + tail)
+    if progress_pipe:
+        return base + ['-progress', 'pipe:1', '-nostats', output]
+    return base + [output]
+
+
+def _spawn_bgr_pipe_muxer(
+    *,
+    video_path: str,
+    output: str,
+    encoder: str,
+    crf: int,
+    vw: int,
+    vh: int,
+    fps: float,
+    audio_start: float,
+    audio_copy: bool,
+    encode_options: Optional[dict],
+    creation_time_utc: Optional[datetime],
+    total_s: float,
+    enc_sec_holder: list,
+):
+    """Start ffmpeg; caller writes BGR frames to *proc.stdin* then closes it.
+
+    A daemon thread drains FFmpeg ``-progress`` lines into *enc_sec_holder[0]*
+    (encoded timeline position in seconds) so the main loop can merge frame and
+    encode progress without fighting the UI callback.
+
+    Returns ``(proc, stderr_buf, stderr_thread, progress_thread)``.
+    Join *stderr_thread* after *proc.wait()*.
+    """
+    import subprocess as _sp
+    import threading as _th
+
+    use_progress = total_s > 0
+    cmd = _build_bgr_pipe_mux_cmd(
+        video_path, output, encoder, crf, vw, vh, fps, audio_start, audio_copy,
+        encode_options, creation_time_utc, use_progress,
+    )
+    stderr_buf: list[bytes] = []
+    stdout_arg = _sp.PIPE if use_progress else _sp.DEVNULL
+    proc = _popen(cmd, stdin=_sp.PIPE, stderr=_sp.PIPE, stdout=stdout_arg)
+
+    def _drain_stderr():
+        stderr_buf.extend(proc.stderr)
+
+    t_err = _th.Thread(target=_drain_stderr, daemon=True)
+    t_err.start()
+
+    t_prog = None
+    if use_progress:
+
+        def _read_progress():
+            for raw_line in proc.stdout:
+                line = raw_line.decode(errors='replace').strip()
+                if line.startswith('out_time_ms='):
+                    try:
+                        us = int(line.split('=', 1)[1])
+                        enc_sec_holder[0] = min(total_s, us / 1_000_000.0)
+                    except (ValueError, ZeroDivisionError):
+                        pass
+
+        t_prog = _th.Thread(target=_read_progress, daemon=True)
+        t_prog.start()
+
+    return proc, stderr_buf, t_err, t_prog
+
+
+def _finalize_bgr_pipe_muxer(proc, stderr_buf, t_err, t_prog, output_path: str) -> None:
+    """Close stdin, wait for ffmpeg, raise :class:`VideoMuxError` on failure."""
+    try:
+        if proc.stdin:
+            proc.stdin.close()
+    except Exception:
+        pass
+    if t_prog is not None:
+        t_prog.join()
+    proc.wait()
+    t_err.join()
+    if proc.returncode != 0:
+        err = b''.join(stderr_buf).decode(errors='replace')
+        logger.error('FFmpeg pipe mux failed:\n%s', err)
+        try:
+            if output_path and os.path.exists(output_path):
+                os.remove(output_path)
+        except Exception:
+            pass
+        raise VideoMuxError(err[-600:])
+
+
 def video_duration(path: str) -> float:
     """Return video duration in seconds via ffprobe."""
     try:
@@ -617,6 +754,11 @@ def render_lap(
                     Defaults to default_layout() if None.
     """
     layout = overlay_layout or default_layout()
+    ff_proc = None
+    ff_stderr: list = []
+    ff_t_err = None
+    ff_t_prog = None
+    enc_sec = [0.0]
 
     def log(msg):
         if log_cb: log_cb(msg)
@@ -690,6 +832,7 @@ def render_lap(
 
     n_frames    = f_end - f_start
     audio_start = vid_start
+    mux_dur_s = n_frames / fps if fps else 0.0
 
     vid_dur_s = total / fps if fps else 0.0
     log(f"  Encoder: {encoder}  |  Video: {vw}×{vh} @ {fps:.2f}fps  |  Duration: {vid_dur_s:.1f}s")
@@ -760,9 +903,28 @@ def render_lap(
         tmp_raw = None
     else:
         cap.set(cv2.CAP_PROP_POS_FRAMES, f_start)
-        tmp_raw = os.path.splitext(out_path)[0] + '_raw.avi'
-        writer  = cv2.VideoWriter(
-            tmp_raw, cv2.VideoWriter_fourcc(*'MJPG'), fps, (vw, vh))
+        eo_mux = dict(encode_options) if isinstance(encode_options, dict) else {}
+        eo_mux['_export_mux_vw'] = vw
+        eo_mux['_export_mux_vh'] = vh
+        eo_mux['_export_mux_fps'] = float(fps)
+        enc_sec[0] = 0.0
+        ff_proc, ff_stderr, ff_t_err, ff_t_prog = _spawn_bgr_pipe_muxer(
+            video_path=video_path,
+            output=out_path,
+            encoder=encoder,
+            crf=crf,
+            vw=vw,
+            vh=vh,
+            fps=float(fps),
+            audio_start=audio_start,
+            audio_copy=True,
+            encode_options=eo_mux,
+            creation_time_utc=utc_first,
+            total_s=mux_dur_s,
+            enc_sec_holder=enc_sec,
+        )
+        writer = None
+        tmp_raw = None
 
     # ── Session metadata + max speed + map data ───────────────────────────────
     _session_meta = _build_session_meta(session, info_overrides)
@@ -946,12 +1108,15 @@ def render_lap(
                     _ov_queue.put(raw)   # writer thread feeds ffmpeg; never blocks main loop
                     processed += 1
             else:
-                shape = chunk_frames[0].shape
                 for raw in results:
-                    writer.write(np.frombuffer(raw, dtype=np.uint8).reshape(shape))
+                    ff_proc.stdin.write(raw)
                     processed += 1
 
-            prog(processed / n_frames * 85, f"Frame {processed}/{n_frames}")
+            fr = processed / max(1, n_frames)
+            en = (enc_sec[0] / mux_dur_s) if mux_dur_s > 0 else 0.0
+            en = min(1.0, max(0.0, en))
+            pct = min(99.5, 100.0 * (0.80 * fr + 0.20 * en))
+            prog(pct, f"Frame {processed}/{n_frames}")
     finally:
         if pool:
             pool.terminate()
@@ -965,6 +1130,11 @@ def render_lap(
                         pass
                     try:
                         _ov_proc.kill()
+                    except Exception:
+                        pass
+                elif ff_proc is not None:
+                    try:
+                        ff_proc.kill()
                     except Exception:
                         pass
             except Exception:
@@ -987,27 +1157,13 @@ def render_lap(
         log(f"  ✓ Saved: {out_path}")
     else:
         cap.release()
-        writer.release()
-
-        prog(87, "Muxing audio…")
-        log("  Muxing audio…")
-        mux_dur_s = n_frames / fps if fps else 0.0
+        log("  Finishing encode (mux audio)…")
+        prog(96.0, "Finishing encode…")
         try:
             if _cancelled():
                 cancelled = True
                 raise ExportCancelledError('cancelled')
-            eo_mux = dict(encode_options) if isinstance(encode_options, dict) else {}
-            eo_mux['_export_mux_vw'] = vw
-            eo_mux['_export_mux_vh'] = vh
-            eo_mux['_export_mux_fps'] = float(fps)
-            mux_audio(tmp_raw, video_path, out_path, encoder, crf,
-                      audio_start=audio_start,
-                      total_s=mux_dur_s,
-                      prog_start=87.0, prog_end=100.0,
-                      progress_cb=progress_cb,
-                      creation_time_utc=utc_first,
-                      encode_options=eo_mux)
-            _safe_remove(tmp_raw)
+            _finalize_bgr_pipe_muxer(ff_proc, ff_stderr, ff_t_err, ff_t_prog, out_path)
             if _cancelled():
                 _safe_remove(out_path)
                 raise ExportCancelledError('cancelled')
@@ -1016,11 +1172,8 @@ def render_lap(
         except Exception as e:
             if isinstance(e, ExportCancelledError) or _cancelled():
                 cancelled = True
-                _safe_remove(tmp_raw)
                 _safe_remove(out_path)
                 raise ExportCancelledError('cancelled')
-            # On failure, remove partial outputs so users don't end up with broken videos.
-            log(f"  ✗ Mux failed: {e}")
-            _safe_remove(tmp_raw)
+            log(f"  ✗ Encode/mux failed: {e}")
             _safe_remove(out_path)
             raise
