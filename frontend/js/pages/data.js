@@ -444,16 +444,14 @@
     <div class="dr-row"><span class="dr-lbl">日期</span><span class="dr-val">${esc(fmtDateTime(s.csv_start))}</span></div>
     <div class="dr-row"><span class="dr-lbl">圈数</span><span class="dr-val">${esc(detailLaps)}</span></div>
     <div class="dr-row"><span class="dr-lbl">最佳</span><span class="dr-val" style="color:var(--ok)">${esc(detailBest)}</span></div>
-    <div class="dr-row" style="align-items:flex-start">
+    <div class="dr-row" style="align-items:center;flex-wrap:wrap">
       <span class="dr-lbl">视频</span>
-      <span class="dr-val" style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;text-align:right">
+      <span class="dr-val" style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0">
         <span class="${hasVid ? '' : 'dr-warn'}">${hasVid ? `✓ ${vidPaths.length} 段` : '✗ 未匹配'}</span>
-        ${!hasVid ? `<span class="dr-hint" style="font-size:9px;color:var(--warn);opacity:0.95">未找到匹配视频。</span>` : ''}
-        <div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;align-items:center;width:100%">
-          <button class="btn btn-secondary btn-sm" id="dr-assign-vid-btn">选择/更换视频（可多选）…</button>
-          <button class="btn btn-secondary btn-sm" id="dr-clear-vid-btn" style="opacity:0.75">清除绑定</button>
-          <span id="dr-assign-vid-msg" class="status-msg"></span>
-        </div>
+        ${!hasVid ? `<span class="dr-hint" style="font-size:9px;color:var(--warn);opacity:0.95;white-space:nowrap">未找到匹配视频。</span>` : ''}
+        <button class="btn btn-secondary btn-sm" id="dr-assign-vid-btn">选择/更换视频（可多选）…</button>
+        <button class="btn btn-secondary btn-sm" id="dr-clear-vid-btn" style="opacity:0.75">清除绑定</button>
+        <span id="dr-assign-vid-msg" class="status-msg"></span>
       </span>
     </div>
     <div class="dr-row">
