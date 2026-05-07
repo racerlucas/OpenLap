@@ -24,7 +24,7 @@ from matplotlib.patches import Circle, FancyBboxPatch
 
 
 def render(data: dict, w: int, h: int):
-    from overlay_utils import fig_to_rgba
+    from overlay_utils import fig_to_rgba, px_to_pt, font_px_to_pt
 
     gx_now   = float(data.get('value',       0.0))
     gy_now   = float(data.get('value_gy',    0.0))
@@ -80,18 +80,18 @@ def render(data: dict, w: int, h: int):
                      (g_range, f'{g_range:.0f}G')]:
         ax.text(r * 0.05, r + g_range * 0.03, label,
                 ha='center', va='bottom', color='#ffffff',
-                alpha=0.28, fontsize=fs, fontfamily='sans-serif')
+                alpha=0.28, fontsize=font_px_to_pt(fs, dpi), fontfamily='sans-serif')
 
     # Axis labels — positioned just inside the plot boundary so they stay clear
     fs_ax = max(5, int(size * 0.060))
     ax.text(0,  g_range * 1.12, 'BRAKE',  ha='center', va='bottom',
-            color=label_col, fontsize=fs_ax, fontfamily='sans-serif')
+            color=label_col, fontsize=font_px_to_pt(fs_ax, dpi), fontfamily='sans-serif')
     ax.text(0, -g_range * 1.12, 'ACCEL',  ha='center', va='top',
-            color=label_col, fontsize=fs_ax, fontfamily='sans-serif')
+            color=label_col, fontsize=font_px_to_pt(fs_ax, dpi), fontfamily='sans-serif')
     ax.text( g_range * 1.12, 0, 'R',      ha='left',   va='center',
-            color=label_col, fontsize=fs_ax, fontfamily='sans-serif')
+            color=label_col, fontsize=font_px_to_pt(fs_ax, dpi), fontfamily='sans-serif')
     ax.text(-g_range * 1.12, 0, 'L',      ha='right',  va='center',
-            color=label_col, fontsize=fs_ax, fontfamily='sans-serif')
+            color=label_col, fontsize=font_px_to_pt(fs_ax, dpi), fontfamily='sans-serif')
 
     # Current G readout — enlarged for readability
     fs_val = max(10, int(size * 0.13))
@@ -99,7 +99,7 @@ def render(data: dict, w: int, h: int):
     ax_bg.text(0.50, 0.06,
                f'{g_total:.1f} G',
                ha='center', va='bottom', color='#ccccdd',
-               fontsize=fs_val, fontfamily='sans-serif',
+               fontsize=font_px_to_pt(fs_val, dpi), fontfamily='sans-serif',
                transform=ax_bg.transAxes)
 
     # History trace (fading)
@@ -111,7 +111,7 @@ def render(data: dict, w: int, h: int):
         alphas = np.linspace(0.05, 0.50, n_trace)
         for i in range(n_trace - 1):
             ax.plot(xs[i:i+2], ys[i:i+2],
-                    color=acc_col, lw=max(0.8, size * 0.006),
+                    color=acc_col, lw=px_to_pt(max(0.8, size * 0.006), dpi),
                     alpha=float(alphas[i]), solid_capstyle='round', zorder=3)
 
     # Current dot — colour by magnitude
@@ -119,9 +119,10 @@ def render(data: dict, w: int, h: int):
     dot_col = warn_col if g_mag > 0.80 else acc_col
     dot_ms  = max(5, int(size * 0.09))
     ax.plot(gx_now, gy_now, 'o',
-            color=dot_col, ms=dot_ms,
-            mec='white', mew=max(0.8, size * 0.005),
+            color=dot_col, ms=px_to_pt(float(dot_ms), dpi),
+            mec='white', mew=px_to_pt(max(0.8, size * 0.005), dpi),
             zorder=5,
-            path_effects=[pe.withStroke(linewidth=dot_ms * 0.4, foreground='black')])
+            path_effects=[pe.withStroke(
+                linewidth=px_to_pt(dot_ms * 0.4, dpi), foreground='black')])
 
     return fig_to_rgba(fig, (w, h))

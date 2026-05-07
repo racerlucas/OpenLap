@@ -69,6 +69,7 @@
     _bindEvents(cfg, items);
     _refreshItemList(items);
     _updateStartBtn(items);
+    _updateCanvasExportHint(container);
 
     // Background encoder probe done event (fires even if Export page isn't active)
     // We only bind this listener when the page is mounted to avoid duplicate updates.
@@ -190,6 +191,7 @@
       export_overlay_only: !!$('exp-overlay-only')?.checked,
       export_lap_range_start: Math.max(1, rs),
       export_lap_range_end,
+      export_process_priority: ($('exp-export-prio')?.value || 'normal'),
     };
   }
 
@@ -201,6 +203,30 @@
       if (!_container) return;
       API.saveConfig(_collectExportCfgPayload()).catch(() => {});
     }, 450);
+  }
+
+  /** Node + canvas_export 就绪状态（导出仅 Canvas，无回退）。 */
+  async function _updateCanvasExportHint(root) {
+    if (!root) return;
+    const el = root.querySelector('#exp-canvas-export-hint');
+    if (!el) return;
+    try {
+      const st = await API.canvasExportStatus();
+      if (st.ready) {
+        el.textContent =
+          '叠加层由 Canvas 渲染（与编辑器同源 gauge JS）；修改 gauges 后请运行 python tools/bundle_canvas_gauges.py。';
+        el.style.color = 'var(--text3)';
+      } else {
+        const parts = [];
+        if (!st.node) parts.push('未找到 Node 运行时（便携版需 Library/node/node.exe；开发机可装 Node 或设 OPENLAP_NODE）');
+        if (!st.bundle || !st.server) parts.push('缺少 canvas_export 文件（gauge_bundle / render_server）');
+        if (!st.napi_installed) parts.push('请在仓库 canvas_export 目录执行 npm install');
+        el.textContent = '以下项不满足时导出将直接失败：' + parts.join('；') + '。';
+        el.style.color = 'var(--warn, #d97706)';
+      }
+    } catch (_) {
+      el.textContent = '';
+    }
   }
 
   async function _refreshResolvedEncoder(root) {
@@ -288,6 +314,8 @@
     const panelCqHidden = rm0 !== 'cq' ? 'hidden' : '';
     const panelVbrHidden = rm0 !== 'vbr' ? 'hidden' : '';
     const panelCbrHidden = rm0 !== 'cbr' ? 'hidden' : '';
+    const expPrio = String(cfg.export_process_priority || 'normal').toLowerCase();
+    const prioSel = v => (expPrio === v ? 'selected' : '');
     const tip = t => `<span class="info-tip" tabindex="0" data-tip="${_esc(t)}">?</span>`;
     return `
 <div class="page export-page">
@@ -440,6 +468,18 @@
           </div>
 
           <div class="form-row">
+            <label>导出进程优先级 ${tip(
+              '仅 Windows：降低 OpenLap 在导出时的进程优先级，减轻与其它程序抢 CPU（导出可能更慢）。\n' +
+              '也可用环境变量 OPENLAP_EXPORT_PRIORITY 覆盖。'
+            )}</label>
+            <select id="exp-export-prio" class="input-field">
+              <option value="normal" ${prioSel('normal')}>正常</option>
+              <option value="below_normal" ${prioSel('below_normal')}>低于正常</option>
+              <option value="idle" ${prioSel('idle')}>空闲（最温和）</option>
+            </select>
+          </div>
+
+          <div class="form-row">
             <label>音频</label>
             <select id="exp-ab-kbps" class="input-field">
               <option value="0" ${!(cfg.export_audio_bitrate_kbps > 0) ? 'selected' : ''}>原片码率（优先无损拷贝）</option>
@@ -523,6 +563,9 @@
                    ${ovOnly ? 'checked' : ''}
                    title="导出透明 ProRes 4444 叠加层，可在 DaVinci Resolve / Premiere / Final Cut 里盖到原视频上。">
           </div>
+          <div class="form-row" style="margin-top:2px">
+            <span id="exp-canvas-export-hint" style="font-size:10px;color:var(--text3);line-height:1.35"></span>
+          </div>
         </div>
       </div>
 
@@ -583,6 +626,7 @@
     const mqEl   = $('exp-max-quality');
     const resEl  = $('exp-res');
     const fpsEl  = $('exp-fps');
+    const prioEl = $('exp-export-prio');
     if (!pathEl && !codecEl) return {};
     return {
       export_path: (pathEl?.value || '').trim(),
@@ -599,6 +643,7 @@
       export_max_quality: !!mqEl?.checked,
       export_target_res: resEl?.value || 'auto',
       export_target_fps: fpsEl?.value || 'auto',
+      export_process_priority: String(prioEl?.value || 'normal').toLowerCase(),
     };
   }
 
@@ -1068,7 +1113,7 @@
     const _estAndPersist = () => { _syncBitrateOptions(); _queueVbrCbrEstimate(); _queuePersistExportCfg(); };
     [
       'exp-padding', 'exp-clip-start', 'exp-clip-end', 'exp-overlay-only',
-      'exp-workers',
+      'exp-workers', 'exp-export-prio',
       'exp-container-choice', 'exp-vb-kbps', 'exp-vmax-kbps', 'exp-ab-kbps',
       'exp-max-quality', 'exp-res', 'exp-fps',
     ].forEach(id => {
@@ -1077,7 +1122,6 @@
       el.addEventListener('input', _estAndPersist);
       el.addEventListener('change', _estAndPersist);
     });
-
     // Start
     $('exp-start-btn').addEventListener('click', () => _startExport());
 
@@ -1202,6 +1246,7 @@
       export_max_quality: exp.export_max_quality ?? cfg.export_max_quality ?? false,
       export_target_res: exp.export_target_res ?? cfg.export_target_res ?? 'auto',
       export_target_fps: exp.export_target_fps ?? cfg.export_target_fps ?? 'auto',
+      export_process_priority: exp.export_process_priority ?? cfg.export_process_priority ?? 'normal',
       overlay_only:     $('exp-overlay-only')?.checked || false,
       layout,
     };

@@ -612,6 +612,11 @@ class WebviewAPI:
             self._config.crf = int(data['crf'])
         if 'workers' in data:
             self._config.workers = int(data['workers'])
+        if 'export_process_priority' in data:
+            from utils import normalize_export_process_priority
+            self._config.export_process_priority = normalize_export_process_priority(
+                str(data.get('export_process_priority') or 'normal'),
+            )
         if 'export_rate_mode' in data:
             self._config.export_rate_mode = str(data['export_rate_mode']).lower()
         if 'export_video_bitrate_kbps' in data:
@@ -2386,6 +2391,11 @@ class WebviewAPI:
 
         _workers = max(1, min(int(params.get('workers', 4)), os.cpu_count() or 4))
         _crf     = max(0, min(int(params.get('crf', 18)), 51))
+        from utils import normalize_export_process_priority
+        _prio_raw = params.get('export_process_priority')
+        if _prio_raw is None:
+            _prio_raw = getattr(self._config, 'export_process_priority', 'normal')
+        _process_priority = normalize_export_process_priority(str(_prio_raw))
         eo = self._export_encode_options(params)
         cc = WebviewAPI._export_container_choice_val(params, self._config)
         try:
@@ -2417,6 +2427,7 @@ class WebviewAPI:
                 lap_flags             = getattr(self._config, 'lap_flags', {}) or {},
                 encode_options        = eo,
                 container_choice      = cc,
+                process_priority      = _process_priority,
                 cancel_event         = self._export_cancel,
             )
         except Exception as e:
@@ -2559,6 +2570,27 @@ class WebviewAPI:
             'version': __version__,
             'python': f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}',
             'config': str(config_file()),
+        }
+
+    def canvas_export_status(self) -> dict:
+        """Whether headless Canvas export (editor-aligned gauges) can run on this machine."""
+        import os
+
+        from node_paths import get_node_exe
+
+        root = os.path.dirname(os.path.abspath(__file__))
+        cdir = os.path.join(root, 'canvas_export')
+        bundle = os.path.join(cdir, 'gauge_bundle.cjs')
+        server = os.path.join(cdir, 'render_server.cjs')
+        napi = os.path.join(cdir, 'node_modules', '@napi-rs', 'canvas')
+        node = get_node_exe()
+        return {
+            'node':           bool(node),
+            'node_path':      node,
+            'bundle':         os.path.isfile(bundle),
+            'server':         os.path.isfile(server),
+            'napi_installed': os.path.isdir(napi),
+            'ready':          bool(node and os.path.isfile(bundle) and os.path.isfile(server) and os.path.isdir(napi)),
         }
 
     # ── AIM DLL status ────────────────────────────────────────────────────────

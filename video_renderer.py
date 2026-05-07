@@ -50,7 +50,14 @@ def _fallback_session_utc(session: Session) -> datetime:
         pass
     return datetime.now(timezone.utc)
 
-from utils import _run, _popen
+from utils import (
+    _run,
+    _popen,
+    export_priority_win_class,
+    get_current_process_priority_class,
+    resolve_export_process_priority,
+    set_current_process_priority_class,
+)
 import cv2
 import numpy as np
 from telemetry_algorithms import (
@@ -72,13 +79,25 @@ from telemetry_algorithms import (
 
 from data_model import Session, Lap, absolute_time_at_elapsed
 from export_codec import resolve_export_container_extension
-from overlay_worker import render_frame_worker, scale_factor, default_layout
+from overlay_dispatch import render_frame_worker
+from overlay_worker import scale_factor, default_layout
 from exceptions import VideoConcatError, VideoMuxError, LapOutOfRangeError
 
 _N_SECTORS = 3  # number of track sectors used for delta-time display
 
 # Map current-position dot: EMA on lat/lon (matches ``editor.js`` ``buildLiveData`` map branch, a=0.34).
 _MAP_DOT_EMA_ALPHA = 0.34
+
+
+def _export_chunk_size(n_workers: int, vw: int, vh: int) -> int:
+    """Frames per export batch — modest sizes avoid long CPU/GPU bursts (smoother scheduling)."""
+    nw = max(1, int(n_workers) or 1)
+    chunk = max(4, min(32, nw * 2))
+    px = max(1, int(vw)) * max(1, int(vh))
+    if px >= 3840 * 2160:
+        chunk = max(4, min(chunk, 16))
+    return max(4, int(chunk))
+
 
 # ── FFmpeg helpers ─────────────────────────────────────────────────────────────
 
@@ -772,6 +791,7 @@ def render_lap(
     container_choice:   str = 'match_source',
     force_vid_start_s:  Optional[float] = None,
     force_vid_end_s:    Optional[float] = None,
+    process_priority: str = 'normal',
     cancel_event=None,
 ) -> None:
     """
@@ -780,8 +800,13 @@ def render_lap(
     overlay_layout: dict with 'map' and 'telemetry' keys, each containing
                     {visible, x, y, w, h} normalized 0..1.
                     Defaults to default_layout() if None.
+
+    Overlay pixels are always rendered via Canvas (Node + ``canvas_export/``);
+    see :func:`overlay_canvas_worker.assert_canvas_export_ready`.
     """
     layout = overlay_layout or default_layout()
+    from overlay_canvas_worker import assert_canvas_export_ready
+    assert_canvas_export_ready()
     ff_proc = None
     ff_stderr: list = []
     ff_t_err = None
@@ -992,7 +1017,7 @@ def render_lap(
     history_buf   = deque(maxlen=HISTORY_MAX)
     _ref_hist_buf = deque(maxlen=HISTORY_MAX)
 
-    chunk     = max(4, n_workers * 2)
+    chunk = _export_chunk_size(n_workers, vw, vh)
     frame_idx = f_start
     processed = 0
 
@@ -1004,6 +1029,14 @@ def render_lap(
     pool = Pool(n_workers) if n_workers > 1 else None
     cancelled = False
     try:
+        _prio_saved: Optional[int] = None
+        _prio_target = export_priority_win_class(resolve_export_process_priority(process_priority))
+        if _prio_target is not None:
+            _cur = get_current_process_priority_class()
+            if _cur is not None and _cur != _prio_target:
+                if set_current_process_priority_class(_prio_target):
+                    _prio_saved = _cur
+
         while frame_idx < f_end:
             if _cancelled():
                 cancelled = True
@@ -1127,25 +1160,27 @@ def render_lap(
                 break
 
             args_list = [
-                (b'' if overlay_only else frm.tobytes(),
-                 (vh, vw, 4) if overlay_only else frm.shape,
-                 cur_map_idx,
-                 map_lats, map_lons,
-                 hist, ref_hist, lap_dur,
-                 vw, vh,
-                 show_map, show_telemetry,
-                 is_bike,
-                 layout,
-                 max_speed,
-                 _sectors,
-                 _session_meta,
-                 _ref_map_lats,
-                 _ref_map_lons,
-                 _ref_lap_duration,
-                 overlay_only,
-                 _track_map_lats,
-                 _track_map_lons,
-                 _track_map_areas)
+                (
+                    b'' if overlay_only else np.ascontiguousarray(frm).tobytes(),
+                    (vh, vw, 4) if overlay_only else frm.shape,
+                    cur_map_idx,
+                    map_lats, map_lons,
+                    hist, ref_hist, lap_dur,
+                    vw, vh,
+                    show_map, show_telemetry,
+                    is_bike,
+                    layout,
+                    max_speed,
+                    _sectors,
+                    _session_meta,
+                    _ref_map_lats,
+                    _ref_map_lons,
+                    _ref_lap_duration,
+                    overlay_only,
+                    _track_map_lats,
+                    _track_map_lons,
+                    _track_map_areas,
+                )
                 for frm, (hist, ref_hist, cur_map_idx) in zip(chunk_frames, chunk_meta)
             ]
 
@@ -1170,6 +1205,8 @@ def render_lap(
         if pool:
             pool.terminate()
             pool.join()
+        if _prio_saved is not None:
+            set_current_process_priority_class(_prio_saved)
         if cancelled:
             try:
                 if overlay_only:

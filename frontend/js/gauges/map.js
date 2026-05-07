@@ -48,7 +48,7 @@ function _transformPoint(x, y, cx, cy, rotateDeg, mirrorX, mirrorY) {
 
 const GaugeMap = {
   render(ctx, data, w, h) {
-    const theme = GaugeBase.getTheme(data.theme || 'Dark');
+    const theme = GaugeBase.getTheme(data);
 
     const lats     = data.lats   || [];
     const lons     = data.lons   || [];
@@ -251,7 +251,7 @@ const GaugeMap = {
    * optional reference-lap trace rendered in purple.
    */
   renderZoomed(ctx, data, w, h) {
-    const theme      = GaugeBase.getTheme(data.theme || 'Dark');
+    const theme      = GaugeBase.getTheme(data);
     const lats       = data.lats   || [];
     const lons       = data.lons   || [];
     const curIdx     = data.cur_idx ?? 0;

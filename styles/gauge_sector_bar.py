@@ -51,7 +51,7 @@ def _sector_colour(delta: float):
 
 
 def render(data: dict, w: int, h: int):
-    from overlay_utils import fig_to_rgba, scale_factor
+    from overlay_utils import fig_to_rgba, scale_factor, px_to_pt, font_px_to_pt
 
     sectors = data.get('sectors', [])
     T       = data.get('_tc', {})
@@ -79,7 +79,7 @@ def render(data: dict, w: int, h: int):
     n = len(sectors)
     if n == 0:
         ax.text(0.5, 0.5, 'No ref lap', ha='center', va='center',
-                color='#445566', fontsize=max(5, int(8 * sc)),
+                color='#445566', fontsize=font_px_to_pt(max(5, int(8 * sc)), dpi),
                 fontfamily='sans-serif')
         return fig_to_rgba(fig, (w, h))
 
@@ -115,14 +115,15 @@ def render(data: dict, w: int, h: int):
         ax.add_patch(FancyBboxPatch(
             (cursor, BOX_Y1), box_w, BOX_H,
             boxstyle=f'round,pad={r:.3f}',
-            facecolor=face, edgecolor=(1, 1, 1, 0.12), linewidth=0.5))
+            facecolor=face, edgecolor=(1, 1, 1, 0.12),
+            linewidth=px_to_pt(0.5, dpi)))
 
         # Sector label (top, small)
         ax.text(cursor + box_w / 2, BOX_Y2 - BOX_H * 0.22,
                 f'S{s.get("num", "?")}',
                 ha='center', va='center',
                 color='white', alpha=0.75,
-                fontsize=max(3, int(fs * 0.62)),
+                fontsize=font_px_to_pt(max(3, int(fs * 0.62)), dpi),
                 fontfamily='sans-serif')
 
         # Delta (centre)
@@ -131,7 +132,7 @@ def render(data: dict, w: int, h: int):
                 f'{sign}{delta:.3f}',
                 ha='center', va='center',
                 color='white', fontweight='bold',
-                fontsize=fs, fontfamily='sans-serif')
+                fontsize=font_px_to_pt(fs, dpi), fontfamily='sans-serif')
 
         cursor += box_w + GAP
 
@@ -147,7 +148,7 @@ def render(data: dict, w: int, h: int):
                 f'S{s.get("num", "?")}',
                 ha='center', va='center',
                 color='#aaaacc', alpha=0.60,
-                fontsize=max(3, int(fs * 0.55)),
+                fontsize=font_px_to_pt(max(3, int(fs * 0.55)), dpi),
                 fontfamily='sans-serif')
         cursor += TICK_W + GAP
 

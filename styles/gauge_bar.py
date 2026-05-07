@@ -19,7 +19,7 @@ from matplotlib.patches import FancyBboxPatch
 
 
 def render(data: dict, w: int, h: int):
-    from overlay_utils import fig_to_rgba, scale_factor
+    from overlay_utils import fig_to_rgba, scale_factor, px_to_pt, font_px_to_pt
 
     value     = data.get('value',       0.0)
     hist      = data.get('history_vals', [value])
@@ -67,7 +67,7 @@ def render(data: dict, w: int, h: int):
     # Label (top zone: 0.82 – 0.96)
     ax.text(0.50, 0.89, label.upper(),
             ha='center', va='center', color=label_col,
-            fontsize=fs_label, fontfamily='sans-serif')
+            fontsize=font_px_to_pt(fs_label, dpi), fontfamily='sans-serif')
 
     # Track
     ax.add_patch(plt.Rectangle((BAR_L, BAR_Y), bar_w, BAR_H,
@@ -103,7 +103,7 @@ def render(data: dict, w: int, h: int):
     val_str = f"{value:.1f} {unit}" if unit else f"{value:.1f}"
     ax.text(0.50, 0.41, val_str,
             ha='center', va='center', color=val_col,
-            fontsize=fs_val, fontweight='bold', fontfamily='sans-serif')
+            fontsize=font_px_to_pt(fs_val, dpi), fontweight='bold', fontfamily='sans-serif')
 
     # Sparkline (bottom zone: 0.05 – 0.27, never reaches value text)
     # High values plot at top of zone, low values at bottom — correct orientation.
@@ -114,6 +114,6 @@ def render(data: dict, w: int, h: int):
         lo, hi_v = mn, mx
         ys   = [0.05 + 0.22 * max(0.0, min(1.0, (v - lo) / (hi_v - lo or 1)))
                 for v in vals]
-        ax.plot(xs, ys, color=trace_col, lw=max(0.6, 0.8 * sc), zorder=2)
+        ax.plot(xs, ys, color=trace_col, lw=px_to_pt(max(0.6, 0.8 * sc), dpi), zorder=2)
 
     return fig_to_rgba(fig, (w, h))

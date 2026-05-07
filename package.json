@@ -4,7 +4,8 @@
   "scripts": {
     "test": "vitest",
     "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "build:canvas-bundle": "python tools/bundle_canvas_gauges.py"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^2.1.0",

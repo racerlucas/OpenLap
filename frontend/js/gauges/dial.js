@@ -10,7 +10,7 @@
  */
 const GaugeDial = {
   render(ctx, data, w, h) {
-    const theme     = GaugeBase.getTheme(data.theme || 'Dark');
+    const theme     = GaugeBase.getTheme(data);
     const value     = data.value     ?? 0;
     const label     = (data.label    || '').toUpperCase();
     const unit      = data.unit      || '';

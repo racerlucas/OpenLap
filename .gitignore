@@ -4,7 +4,7 @@ __pycache__/
 racebox_auth.json
 *.dll
 .claude/
-
+.cursor/
 # Local app state (config, caches, tracks, logs — never under ~/.openlap)
 .openlap/
 
@@ -12,6 +12,7 @@ racebox_auth.json
 ffmpeg.exe
 ffprobe.exe
 third_party/ffmpeg/
+third_party/node/
 
 # Build / distribution
 build/

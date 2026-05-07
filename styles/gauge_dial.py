@@ -20,7 +20,7 @@ from matplotlib.patches import FancyBboxPatch, Arc, FancyArrowPatch
 
 
 def render(data: dict, w: int, h: int):
-    from overlay_utils import fig_to_rgba, scale_factor
+    from overlay_utils import fig_to_rgba, scale_factor, px_to_pt, font_px_to_pt
 
     value     = data.get('value',     0.0)
     label     = data.get('label',     '')
@@ -57,11 +57,9 @@ def render(data: dict, w: int, h: int):
     ax.add_patch(plt.Circle((0, 0), 1.18,
         facecolor=bg_rgba, edgecolor=bg_edge, linewidth=0.8))
 
-    # Cap fs_value so value + unit text never overlap at any gauge size.
-    # The two text items share ~0.35 of the gauge height below centre.
-    # 0.35 * h / (100/72) gives the max total pt that fits; split ~75/25.
-    _text_budget = int(min(w, h) * 0.35 * 72 / 100)
-    fs_value = max(8,  min(int(22 * sc), int(_text_budget * 0.72)))
+    # Cap fs_value (pixel budget, same as ``frontend/js/gauges/dial.js``).
+    _text_budget_px = int(min(w, h) * 0.35)
+    fs_value = max(8,  min(int(22 * sc), int(_text_budget_px * 0.72)))
     fs_label = max(5,  min(int(9  * sc), int(w * 0.08)))
     fs_unit  = max(4,  min(int(7  * sc), int(w * 0.06)))
 
@@ -70,8 +68,8 @@ def render(data: dict, w: int, h: int):
     ARC_END    = ARC_START - ARC_SWEEP
     R_TRACK    = 0.85
     R_FILL     = 0.85
-    LW_TRACK   = max(4, int(10 * sc))
-    LW_FILL    = max(4, int(10 * sc))
+    LW_TRACK   = px_to_pt(max(4.0, 10.0 * sc), dpi)
+    LW_FILL    = px_to_pt(max(4.0, 10.0 * sc), dpi)
 
     rng  = mx - mn if mx != mn else 1.0
     frac = max(0.0, min(1.0, (value - mn) / rng))
@@ -102,8 +100,9 @@ def render(data: dict, w: int, h: int):
     ny = 0.70 * np.sin(needle_angle)
     ax.annotate('', xy=(nx, ny), xytext=(0, 0),
                 arrowprops=dict(arrowstyle='->', color=text_col,
-                                lw=max(1.0, 1.5 * sc)))
-    ax.plot(0, 0, 'o', color=text_col, markersize=max(3, 5 * sc), zorder=5)
+                                lw=px_to_pt(max(1.0, 1.5 * sc), dpi)))
+    ax.plot(0, 0, 'o', color=text_col,
+            markersize=px_to_pt(2.0 * max(3.0, 5.0 * sc), dpi), zorder=5)
 
     # Tick marks
     for tick_frac in [0.0, 0.25, 0.5, 0.75, 1.0]:
@@ -111,7 +110,7 @@ def render(data: dict, w: int, h: int):
         r0, r1 = 0.73, 0.82
         ax.plot([r0 * np.cos(ta), r1 * np.cos(ta)],
                 [r0 * np.sin(ta), r1 * np.sin(ta)],
-                color='#2a3a4a', lw=max(0.8, 1.0 * sc), zorder=2)
+                color='#2a3a4a', lw=px_to_pt(max(0.8, 1.0 * sc), dpi), zorder=2)
 
     # Value text
     if channel == 'lap_time':
@@ -131,12 +130,12 @@ def render(data: dict, w: int, h: int):
 
     ax.text(0, -0.18, val_str,
             ha='center', va='center', color=text_col,
-            fontsize=fs_value, fontweight='bold', fontfamily='sans-serif', zorder=6)
+            fontsize=font_px_to_pt(fs_value, dpi), fontweight='bold', fontfamily='sans-serif', zorder=6)
     ax.text(0, -0.72, unit,
             ha='center', va='center', color=unit_col,
-            fontsize=fs_unit, fontfamily='sans-serif', zorder=6)
+            fontsize=font_px_to_pt(fs_unit, dpi), fontfamily='sans-serif', zorder=6)
     ax.text(0, 0.55, label.upper(),
             ha='center', va='center', color=label_col,
-            fontsize=fs_label, fontfamily='sans-serif', zorder=6)
+            fontsize=font_px_to_pt(fs_label, dpi), fontfamily='sans-serif', zorder=6)
 
     return fig_to_rgba(fig, (w, h))

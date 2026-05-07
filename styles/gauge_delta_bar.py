@@ -30,7 +30,7 @@ def _bar_magnitude(delta: float, full_scale: float = 1.0, exponent: float = 0.45
 
 
 def render(data: dict, w: int, h: int):
-    from overlay_utils import fig_to_rgba, scale_factor
+    from overlay_utils import fig_to_rgba, scale_factor, px_to_pt, font_px_to_pt
 
     raw = data.get('value', None)
     has_value = raw is not None and math.isfinite(float(raw))
@@ -62,7 +62,7 @@ def render(data: dict, w: int, h: int):
     fs_label = max(5, min(int(10 * sc), int(w * 0.08)))
     fs_val = max(6, min(int(15 * sc), int(w * 0.12)))
     ax.text(0.5, 0.84, label.upper(), ha='center', va='center',
-            color=label_col, fontsize=fs_label, fontfamily='sans-serif')
+            color=label_col, fontsize=font_px_to_pt(fs_label, dpi), fontfamily='sans-serif')
 
     x0, x1 = 0.08, 0.92
     y0, bh = 0.42, 0.20
@@ -80,7 +80,8 @@ def render(data: dict, w: int, h: int):
         ax.add_patch(Rectangle((cx + (bw * 0.5) * frac, y0), (bw * 0.5) * (-frac), bh,
                                facecolor='#22dd66', edgecolor='none', alpha=0.9))
 
-    ax.plot([cx, cx], [y0 - 0.02, y0 + bh + 0.02], color='#3a4a5a', linewidth=1)
+    ax.plot([cx, cx], [y0 - 0.02, y0 + bh + 0.02], color='#3a4a5a',
+            linewidth=px_to_pt(1.0, dpi))
 
     if has_value:
         txt = f"+{value:.3f}" if value >= 0 else f"\u2212{abs(value):.3f}"
@@ -89,7 +90,7 @@ def render(data: dict, w: int, h: int):
         txt = '\u2014'
         tcol = label_col
     ax.text(0.5, 0.25, txt, ha='center', va='center',
-            color=tcol, fontsize=fs_val, fontweight='bold',
+            color=tcol, fontsize=font_px_to_pt(fs_val, dpi), fontweight='bold',
             fontfamily='sans-serif')
 
     return fig_to_rgba(fig, (w, h))

@@ -4,6 +4,8 @@
 Build pipeline:
 - Run PyInstaller using ``OpenLap.spec`` (onedir: ``<distpath>/OpenLap/``; default ``dist/OpenLap/``)
 - Stage FFmpeg into ``<distpath>/OpenLap/Library/ffmpeg/``
+- Stage Node ``node.exe`` into ``<distpath>/OpenLap/Library/node/``
+- Stage only ``tracks/README.txt`` and ``tracks/*.template.json`` into ``<distpath>/OpenLap/tracks/``
 - Zip the whole onedir folder into one file under ``dist/OpenLap_<version>.zip``
 
 If the repository is on a UNC/SMB path, this script defaults ``--distpath`` / ``--workpath``
@@ -127,6 +129,20 @@ def main() -> int:
     )
     if r2 != 0:
         return int(r2)
+
+    r2b = subprocess.call(
+        [sys.executable, str(HERE / "tools" / "stage_dist_library_node.py"), str(dist_dir)],
+        cwd=str(HERE),
+    )
+    if r2b != 0:
+        return int(r2b)
+
+    r3 = subprocess.call(
+        [sys.executable, str(HERE / "tools" / "stage_dist_tracks.py"), str(dist_dir)],
+        cwd=str(HERE),
+    )
+    if r3 != 0:
+        return int(r3)
 
     # Create one zip artifact in dist/: OpenLap_<version>.zip
     if not dist_dir.is_dir():

@@ -80,6 +80,8 @@ class AppConfig:
     export_encoder_family: str = 'auto'    # auto | cpu | nvenc | amf | qsv | videotoolbox
     crf:     int   = 18
     workers: int   = 4
+    # Windows: whole-process priority during export (see ``utils.normalize_export_process_priority``).
+    export_process_priority: str = 'normal'
     # Export encoding (UI + FFmpeg) — names mirror webview `export_*` keys
     export_rate_mode: str = 'cq'          # cq | vbr | cbr
     export_video_bitrate_kbps: int = 0    # 0 = auto (Shutter-style heuristic)
@@ -330,6 +332,7 @@ def _from_dict(data: dict) -> AppConfig:
     except (TypeError, ValueError):
         _lrs = 1
     _lrs = max(1, _lrs)
+
     _lre_raw = data.get('export_lap_range_end', None)
     if _lre_raw is None or (isinstance(_lre_raw, str) and not str(_lre_raw).strip()):
         _lre: Optional[int] = None
@@ -340,6 +343,9 @@ def _from_dict(data: dict) -> AppConfig:
             _lre = None
         if _lre is not None and _lre < _lrs:
             _lre = None
+
+    from utils import normalize_export_process_priority
+    _export_prio = normalize_export_process_priority(data.get('export_process_priority', 'normal'))
 
     return AppConfig(
         racebox_path   = data.get('racebox_path',   ''),
@@ -362,6 +368,7 @@ def _from_dict(data: dict) -> AppConfig:
         export_encoder_family = _fam,
         crf               = int(data.get('crf',           18)),
         workers           = int(data.get('workers',       4)),
+        export_process_priority = _export_prio,
         export_rate_mode  = data.get('export_rate_mode', 'cq'),
         export_video_bitrate_kbps    = max(0, int(data.get('export_video_bitrate_kbps') or 0)),
         export_video_max_bitrate_kbps = max(0, int(data.get('export_video_max_bitrate_kbps') or 0)),

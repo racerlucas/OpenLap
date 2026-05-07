@@ -13,9 +13,18 @@ from __future__ import annotations
 import logging
 from typing import Tuple
 from overlay_utils import blend_rgba, blend_rgba_onto_rgba, scale_factor
-from gauge_channels import _ema_smooth
 
 logger = logging.getLogger(__name__)
+
+# Prefer the same UI stack as the editor preview so ``fontsize`` pt matches Canvas px.
+try:
+    import matplotlib as _mpl
+    _sans = ['Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC',
+             'DejaVu Sans', 'Bitstream Vera Sans', 'sans-serif']
+    _mpl.rcParams['font.sans-serif'] = _sans
+    _mpl.rcParams['font.family'] = 'sans-serif'
+except Exception:
+    pass
 
 def default_layout() -> dict:
     """Return a default overlay layout dict (used when no config is present)."""
@@ -32,9 +41,9 @@ def default_layout() -> dict:
     }
 
 
-def render_frame_worker(args: Tuple) -> bytes:
+def render_overlay_matplotlib(args: Tuple) -> bytes:
     """
-    Multiprocessing worker: renders overlay onto one video frame.
+    Multiprocessing worker: renders overlay onto one video frame (Matplotlib).
 
     args = (frame_bytes, shape, cur_pt_idx,
             lap_lats, lap_lons,
@@ -49,29 +58,13 @@ def render_frame_worker(args: Tuple) -> bytes:
             sectors)        # list of pre-computed sector dicts, or []
     """
     import numpy as np
-    from style_registry  import render_style
-    from gauge_channels  import gauge_data, GAUGE_CHANNELS, build_multi_data, MULTI_CHANNEL
+    from style_registry import render_style
+    from overlay_paint_plan import iter_overlay_layers, unpack_overlay_worker_args
 
-    (frame_bytes, shape, cur_pt_idx,
-     lap_lats, lap_lons,
-     history, ref_history, lap_duration,
-     vw, vh,
-     show_map, show_telemetry,
-     is_bike,
-     overlay_layout,
-     max_speed,
-     sectors,
-     *_extra) = args
-    session_meta      = _extra[0] if len(_extra) > 0 else {}
-    ref_lats          = _extra[1] if len(_extra) > 1 else []
-    ref_lons          = _extra[2] if len(_extra) > 2 else []
-    ref_duration      = _extra[3] if len(_extra) > 3 else 0.0
-    overlay_only      = _extra[4] if len(_extra) > 4 else False
-    track_map_lats    = _extra[5] if len(_extra) > 5 else []
-    track_map_lons    = _extra[6] if len(_extra) > 6 else []
-    track_map_areas   = _extra[7] if len(_extra) > 7 else []
-
-    from gauge_channels import gauge_data_lap_info
+    u = unpack_overlay_worker_args(args)
+    vw, vh = int(u['vw']), int(u['vh'])
+    overlay_only = bool(u['overlay_only'])
+    frame_bytes, shape = u['frame_bytes'], u['shape']
 
     if overlay_only:
         frame  = np.zeros((vh, vw, 4), dtype=np.uint8)
@@ -79,136 +72,17 @@ def render_frame_worker(args: Tuple) -> bytes:
     else:
         frame  = np.frombuffer(frame_bytes, dtype=np.uint8).reshape(shape).copy()
         _blend = blend_rgba
-    layout = overlay_layout or default_layout()
-    theme  = layout.get('theme', 'Dark')
 
-    # ── Gauges and map ────────────────────────────────────────────────────────
-    for g in layout.get('gauges', []):
-        if not g.get('visible', True):
-            continue
-        channel = g.get('channel', 'speed')
-        style   = g.get('style',   'Numeric')
-        gx      = int(g.get('x', 0.0) * vw)
-        gy      = int(g.get('y', 0.0) * vh)
-        gw      = max(32, int(g.get('w', 0.12) * vw))
-        gh      = max(24, int(g.get('h', 0.20) * vh))
-
-        if channel == 'info':
-            gd = dict(session_meta)
-            # Per-gauge overrides only fill fields that the session doesn't provide,
-            # so actual session data always wins over stale overlay-editor text.
-            for k, v in (g.get('info_overrides') or {}).items():
-                if v and not gd.get(f'info_{k}'):
-                    gd[f'info_{k}'] = v
-            gd['selected_fields'] = g.get('selected_fields') or g.get('channels') or []
-            gd['_theme'] = theme
-            try:
-                img = render_style('gauge', style, gd, gw, gh)
-                _blend(frame, img, gx, gy)
-            except Exception as e:
-                logger.debug('Failed to render info gauge %s: %s', style, e)
-            continue
-
-        if channel == 'lap_info':
-            gd = gauge_data_lap_info(history)
-            gd['selected_fields'] = g.get('selected_fields') or ['lap', 'best', 'current', 'delta']
-            gd['best_mode'] = g.get('best_mode', 'so_far')
-            gd['_theme'] = theme
-            try:
-                img = render_style('gauge', style, gd, gw, gh)
-                _blend(frame, img, gx, gy)
-            except Exception as e:
-                logger.debug('Failed to render lap_info gauge %s: %s', style, e)
-            continue
-
-        if channel == 'image':
-            gd = {
-                'image_path': g.get('image_path', ''),
-                'opacity': float(g.get('opacity', 1.0)),
-                'fit': g.get('fit', 'contain'),
-                '_theme': theme,
-            }
-            try:
-                img = render_style('gauge', style, gd, gw, gh)
-                _blend(frame, img, gx, gy)
-            except Exception as e:
-                logger.debug('Failed to render image gauge %s: %s', gd.get('image_path', ''), e)
-            continue
-
-        if channel == 'map':
-            if not (show_map and lap_lats):
-                continue
-            if ref_lats:
-                if ref_duration > 0 and history:
-                    cur_elapsed = history[-1].get('t', 0.0)
-                    ref_frac    = min(1.0, max(0.0, cur_elapsed / ref_duration))
-                    ref_cur_idx = int(ref_frac * max(0, len(ref_lats) - 1))
-                else:
-                    ref_cur_idx = int(cur_pt_idx / max(1, len(lap_lats) - 1)
-                                      * max(0, len(ref_lats) - 1))
-            else:
-                ref_cur_idx = 0
-            osm_on = g.get('track_map_enabled', True)
-            data = {
-                'lats': lap_lats, 'lons': lap_lons, 'cur_idx': cur_pt_idx,
-                '_theme': theme,
-                'zoom_radius_m':  g.get('zoom_radius_m', 150),
-                'show_ref':       g.get('show_ref', True),
-                'map_rotate_deg': g.get('map_rotate_deg', 0),
-                'map_mirror_x':   g.get('map_mirror_x', False),
-                'map_mirror_y':   g.get('map_mirror_y', False),
-                'ref_lats':       ref_lats,
-                'ref_lons':       ref_lons,
-                'ref_cur_idx':    ref_cur_idx,
-                'track_map_lats':  track_map_lats  if osm_on else [],
-                'track_map_lons':  track_map_lons  if osm_on else [],
-                'track_map_areas': track_map_areas if osm_on else [],
-            }
-            try:
-                mi = render_style('map', style, data, max(60, gw), max(60, gh))
-                _blend(frame, mi, gx, gy)
-            except Exception as e:
-                logger.debug('Failed to render map gauge %s: %s', style, e)
-        elif show_telemetry and history:
-            if channel == MULTI_CHANNEL:
-                sub_channels = g.get('multi_channels') or g.get('channels') or []
-                if not sub_channels:
-                    continue
-                gd = build_multi_data(sub_channels, history,
-                                      ref_history if ref_history else [])
-                gd['_theme'] = theme
-            else:
-                gd = gauge_data(channel, history)
-                gd['lap_duration'] = lap_duration
-                gd['is_bike']      = is_bike
-                gd['_theme']       = theme
-                cur_elapsed = history[-1].get('t', 0.0) if history else 0.0
-                gd['sectors'] = [
-                    {**s, 'done': s['done'] and s.get('boundary_elapsed', float('inf')) <= cur_elapsed}
-                    for s in sectors
-                ]
-                # Per-gauge style options saved in layout (not part of gauge_data())
-                if channel == 'delta_time' and style == 'Delta Bar':
-                    for _k in ('delta_bar_full_scale', 'delta_bar_curve'):
-                        if _k in g:
-                            gd[_k] = g[_k]
-                if channel == 'speed':
-                    gd['max_val'] = max_speed
-                if ref_history:
-                    hk = GAUGE_CHANNELS.get(channel, GAUGE_CHANNELS['speed'])['hist_key']
-                    ref_vals = [p.get(hk, 0.0) for p in ref_history]
-                    if channel in ('gforce_total', 'gforce_lat', 'gforce_lon', 'g_meter'):
-                        ref_vals = _ema_smooth(ref_vals)
-                    gd['ref_history_vals'] = ref_vals
-                if channel == 'g_meter':
-                    gy_hist = [p.get('gy', 0.0) for p in history]
-                    gy_hist = _ema_smooth(gy_hist)
-                    gd['history_gy'] = gy_hist
-                    gd['value_gy']   = gy_hist[-1] if gy_hist else 0.0
-            try:
-                img = render_style('gauge', style, gd, gw, gh)
-                _blend(frame, img, gx, gy)
-            except Exception as e:
-                logger.debug('Failed to render gauge %s/%s: %s', channel, style, e)
+    # ── Gauges and map (shared iteration with Canvas export in overlay_paint_plan)
+    for el_type, style, gx, gy, gw, gh, data in iter_overlay_layers(args):
+        try:
+            img = render_style(el_type, style, data, gw, gh)
+            _blend(frame, img, gx, gy)
+        except Exception as e:
+            logger.debug('Failed to render %s/%s: %s', el_type, style, e)
 
     return frame.tobytes()
+
+
+# Video export uses ``overlay_dispatch.render_frame_worker`` (Canvas only).
+# ``render_overlay_matplotlib`` remains for style plugin / matplotlib tooling.

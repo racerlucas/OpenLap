@@ -23,7 +23,7 @@ from matplotlib.transforms import Affine2D
 
 
 def render(data: dict, w: int, h: int):
-    from overlay_utils import fig_to_rgba, scale_factor
+    from overlay_utils import fig_to_rgba, scale_factor, px_to_pt, font_px_to_pt
 
     value   = data.get('value',   0.0)
     label   = data.get('label',   'Lean')
@@ -70,19 +70,21 @@ def render(data: dict, w: int, h: int):
 
     body = rot([(-0.04, -0.30), (-0.04, 0.28)])
     ax.plot([body[0][0], body[1][0]], [body[0][1], body[1][1]],
-            color=bike_body, lw=max(2.5, 4.0 * sc), solid_capstyle='round', zorder=3)
+            color=bike_body, lw=px_to_pt(max(2.5, 4.0 * sc), dpi),
+            solid_capstyle='round', zorder=3)
 
     rear_cx, rear_cy  = rot([(0.18,  -0.38)])[0]
     front_cx, front_cy = rot([(-0.22, -0.30)])[0]
 
     for cx, cy, r in [(rear_cx, rear_cy, 0.20), (front_cx, front_cy, 0.19)]:
         wheel = plt.Circle((cx, cy), r * sc * 0.6,
-                            fill=False, edgecolor=bike_parts, linewidth=max(1.5, 2.5 * sc))
+                            fill=False, edgecolor=bike_parts,
+                            linewidth=px_to_pt(max(1.5, 2.5 * sc), dpi))
         ax.add_patch(wheel)
 
     fork_top = rot([(-0.06, 0.22)])[0]
     ax.plot([fork_top[0], front_cx], [fork_top[1], front_cy],
-            color=bike_parts, lw=max(1.5, 2.5 * sc), zorder=3)
+            color=bike_parts, lw=px_to_pt(max(1.5, 2.5 * sc), dpi), zorder=3)
 
     rider_pts = rot([(0.0, 0.26)])
     rider_x, rider_y = rider_pts[0]
@@ -93,7 +95,7 @@ def render(data: dict, w: int, h: int):
                              facecolor=rider_head, alpha=0.90, zorder=4))
 
     ax.plot([-0.85, 0.85], [-0.72, -0.72],
-            color=ground_col, lw=max(0.8, 1.2 * sc), zorder=1)
+            color=ground_col, lw=px_to_pt(max(0.8, 1.2 * sc), dpi), zorder=1)
 
     abs_lean = abs(value)
     if abs_lean < 20:
@@ -108,9 +110,9 @@ def render(data: dict, w: int, h: int):
 
     ax.text(0, -0.82, val_str,
             ha='center', va='center', color=val_col,
-            fontsize=fs_val, fontweight='bold', fontfamily='sans-serif', zorder=6)
+            fontsize=font_px_to_pt(fs_val, dpi), fontweight='bold', fontfamily='sans-serif', zorder=6)
     ax.text(0, 0.85, label.upper(),
             ha='center', va='center', color=label_col,
-            fontsize=fs_label, fontfamily='sans-serif', zorder=6)
+            fontsize=font_px_to_pt(fs_label, dpi), fontfamily='sans-serif', zorder=6)
 
     return fig_to_rgba(fig, (w, h))

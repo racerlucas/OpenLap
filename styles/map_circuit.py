@@ -19,6 +19,17 @@ import matplotlib.pyplot as plt
 import math
 
 
+def _gps_dot_ok(data: dict) -> tuple[float, float, bool]:
+    try:
+        la = float(data.get('dot_lat', float('nan')))
+        lo = float(data.get('dot_lon', float('nan')))
+        if math.isfinite(la) and math.isfinite(lo):
+            return la, lo, True
+    except (TypeError, ValueError):
+        pass
+    return 0.0, 0.0, False
+
+
 def _chaikin(xs, ys, rounds=2):
     """Chaikin corner-cutting: smooths an open polyline in-place."""
     for _ in range(rounds):
@@ -36,11 +47,12 @@ def _chaikin(xs, ys, rounds=2):
 
 
 def render(data: dict, w: int, h: int):
-    from overlay_utils import fig_to_rgba
+    from overlay_utils import fig_to_rgba, px_to_pt
 
     lats    = data['lats']
     lons    = data['lons']
     cur_idx = data['cur_idx']
+    dpi     = 100
 
     T               = data.get('_tc', {})
     map_bg          = T.get('map_bg_rgba',     (0, 0, 0, 0.65))
@@ -57,40 +69,56 @@ def render(data: dict, w: int, h: int):
     mirror_x   = bool(data.get('map_mirror_x', False))
     mirror_y   = bool(data.get('map_mirror_y', False))
 
-    def _transform_xy(xs, ys):
+    def _transform_xy(xs, ys, rcx: float, rcy: float):
         if not xs or not ys:
             return xs, ys
-        cx = (min(xs) + max(xs)) * 0.5
-        cy = (min(ys) + max(ys)) * 0.5
         rad = math.radians(rotate_deg)
         cr, sr = math.cos(rad), math.sin(rad)
         ox, oy = [], []
         for x, y in zip(xs, ys):
-            dx = x - cx
-            dy = y - cy
+            dx = x - rcx
+            dy = y - rcy
             if mirror_x:
                 dx = -dx
             if mirror_y:
                 dy = -dy
-            ox.append(cx + (dx * cr - dy * sr))
-            oy.append(cy + (dx * sr + dy * cr))
+            ox.append(rcx + (dx * cr - dy * sr))
+            oy.append(rcy + (dx * sr + dy * cr))
         return ox, oy
 
-    lons, lats = _transform_xy(lons, lats)
+    # One rotation pivot for GPS + OSM + areas (matches single bbox in preview).
+    _allo = list(lons) + list(osm_lons)
+    _alla = list(lats) + list(osm_lats)
+    for _a in osm_areas:
+        _allo.extend(_a.get('lons', []) or [])
+        _alla.extend(_a.get('lats', []) or [])
+    if _allo and _alla:
+        rcx = (min(_allo) + max(_allo)) * 0.5
+        rcy = (min(_alla) + max(_alla)) * 0.5
+    else:
+        rcx = (min(lons) + max(lons)) * 0.5
+        rcy = (min(lats) + max(lats)) * 0.5
+
+    lons, lats = _transform_xy(lons, lats, rcx, rcy)
     if has_osm:
-        osm_lons, osm_lats = _transform_xy(osm_lons, osm_lats)
+        osm_lons, osm_lats = _transform_xy(osm_lons, osm_lats, rcx, rcy)
     transformed_areas = []
     for area in osm_areas:
         a_lats = area.get('lats', [])
         a_lons = area.get('lons', [])
         if a_lats and a_lons:
-            tlons, tlats = _transform_xy(a_lons, a_lats)
+            tlons, tlats = _transform_xy(a_lons, a_lats, rcx, rcy)
             transformed_areas.append({'lats': tlats, 'lons': tlons})
         else:
             transformed_areas.append(area)
     osm_areas = transformed_areas
 
-    dpi = 100
+    dot_la, dot_lo, use_dot = _gps_dot_ok(data)
+    if use_dot:
+        _dl, _da = _transform_xy([dot_lo], [dot_la], rcx, rcy)
+        dot_lo_t, dot_la_t = _dl[0], _da[0]
+    else:
+        dot_lo_t = dot_la_t = None
     fig, ax = plt.subplots(figsize=(w / dpi, h / dpi), dpi=dpi)
     fig.patch.set_alpha(0)
     ax.set_facecolor(map_bg)
@@ -102,28 +130,42 @@ def render(data: dict, w: int, h: int):
         if len(a_lats) >= 3:
             ax.fill(a_lons, a_lats, color='#4a5568', alpha=0.55, zorder=0)
 
+    # Line widths: Canvas uses fractions of gauge width; convert pt→match px.
+    lw_osm_a = px_to_pt(max(6.0, w * 0.045), dpi)
+    lw_osm_b = px_to_pt(max(4.0, w * 0.028), dpi)
+    lw_out   = px_to_pt(max(4.0, w * 0.030), dpi)
+    lw_in    = px_to_pt(max(2.0, w * 0.015), dpi)
+
     # Draw OSM road background (above area fill, below GPS trace) — smoothed
     if has_osm:
         s_lons, s_lats = _chaikin(osm_lons, osm_lats)
-        ax.plot(s_lons, s_lats, color='#4a5568', lw=9.0,
+        ax.plot(s_lons, s_lats, color='#4a5568', lw=lw_osm_a,
                 solid_capstyle='round', solid_joinstyle='round', zorder=0)
-        ax.plot(s_lons, s_lats, color='#2d3748', lw=5.5,
+        ax.plot(s_lons, s_lats, color='#2d3748', lw=lw_osm_b,
                 solid_capstyle='round', solid_joinstyle='round', zorder=0)
 
     s_lons_gps, s_lats_gps = _chaikin(lons, lats)
-    ax.plot(s_lons_gps, s_lats_gps, color=track_outer, lw=5.0,
+    ax.plot(s_lons_gps, s_lats_gps, color=track_outer, lw=lw_out,
             solid_capstyle='round', solid_joinstyle='round', zorder=1)
-    ax.plot(s_lons_gps, s_lats_gps, color=track_inner, lw=2.5,
+    ax.plot(s_lons_gps, s_lats_gps, color=track_inner, lw=lw_in,
             solid_capstyle='round', solid_joinstyle='round', zorder=2)
 
-    if 0 <= cur_idx < len(lats):
+    r_px = max(4.0, w * 0.025)
+    ms_dot = px_to_pt(2.0 * r_px, dpi)
+    mew_dot = px_to_pt(max(1.0, w * 0.006), dpi)
+    if use_dot and dot_lo_t is not None:
+        ax.plot(dot_lo_t, dot_la_t, 'o',
+                color=dot_col, ms=max(7.0, ms_dot),
+                mec='white', mew=mew_dot, zorder=6)
+    elif 0 <= cur_idx < len(lats):
         ax.plot(lons[cur_idx], lats[cur_idx], 'o',
-                color=dot_col, ms=max(7, min(w, h) // 30),
-                mec='white', mew=1.8, zorder=6)
+                color=dot_col, ms=max(7.0, ms_dot),
+                mec='white', mew=mew_dot, zorder=6)
 
+    ms_start = px_to_pt(2.0 * max(3.0, w * 0.020), dpi)
     ax.plot(lons[0], lats[0], 's',
-            color=start_col, ms=max(5, min(w, h) // 40),
-            mec='white', mew=1.2, zorder=5)
+            color=start_col, ms=max(5.0, ms_start * 0.85),
+            mec='white', mew=px_to_pt(max(1.0, w * 0.006), dpi), zorder=5)
 
     # Combined bounding box so neither GPS trace nor OSM outline/areas get clipped
     area_lats = [la for a in osm_areas for la in a.get('lats', [])]

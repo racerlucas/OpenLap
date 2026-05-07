@@ -46,6 +46,7 @@ jobs:
         shell: bash
         run: |
           python -m PyInstaller OpenLap.spec --clean -y
+          python tools/stage_dist_tracks.py dist/OpenLap.app
           ZIP="OpenLap-${{ github.ref_name }}-macos.zip"
           rm -f "$ZIP"
           # Keep parent dir so users get OpenLap.app at top-level when unzipped

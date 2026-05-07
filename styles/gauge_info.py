@@ -20,7 +20,7 @@ from matplotlib.patches import FancyBboxPatch
 
 
 def render(data: dict, w: int, h: int):
-    from overlay_utils import fig_to_rgba
+    from overlay_utils import fig_to_rgba, px_to_pt, font_px_to_pt
 
     T         = data.get('_tc', {})
     bg_rgba   = T.get('bg_rgba',      (0.04, 0.06, 0.10, 0.78))
@@ -86,7 +86,7 @@ def render(data: dict, w: int, h: int):
 
     # Thin accent bar on the left edge
     ax.plot([0.035, 0.035], [0.08, 0.92],
-            color=fill_pos, lw=2.5, solid_capstyle='round', zorder=3)
+            color=fill_pos, lw=px_to_pt(2.5, dpi), solid_capstyle='round', zorder=3)
 
     n        = len(fields)
     pad_l    = 0.08
@@ -95,9 +95,8 @@ def render(data: dict, w: int, h: int):
     y_bottom = 0.06
     row_h    = (y_top - y_bottom) / max(n, 1)
 
-    # Font sizes scale with available row height (1 pt ≈ 1.39 px at 100 dpi)
-    fs_label = max(4, int(h * row_h * 0.26 / 1.39))
-    fs_value = max(5, int(h * row_h * 0.48 / 1.39))
+    fs_label = max(4, int(h * row_h * 0.26))
+    fs_value = max(5, int(h * row_h * 0.48))
 
     for i, (lbl, val) in enumerate(fields):
         yc    = y_top - row_h * (i + 0.5)
@@ -106,9 +105,9 @@ def render(data: dict, w: int, h: int):
 
         ax.text(x_text, y_lbl, lbl,
                 ha=align, va='center', color=label_col,
-                fontsize=fs_label, zorder=4)
+                fontsize=font_px_to_pt(fs_label, dpi), zorder=4)
         ax.text(x_text, y_val, val,
                 ha=align, va='center', color=text_col,
-                fontsize=fs_value, fontweight='bold', zorder=4)
+                fontsize=font_px_to_pt(fs_value, dpi), fontweight='bold', zorder=4)
 
     return fig_to_rgba(fig, (w, h))

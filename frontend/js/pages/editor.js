@@ -6,8 +6,10 @@
  * ``get_editor_catalog``, ``load_preview_history``, ``compute_preview_delta``,
  * ``get_preview_map_tracks`` — same pipeline as ``video_renderer`` / ``telemetry_algorithms``.
  *
- * Canvas gauge modules are **presentation**; they consume the same ``data`` keys as
- * export styles where applicable, but need not match matplotlib pixel-for-pixel.
+ * Canvas gauge modules are **presentation**. Video export always runs the same gauge JS
+ * (``canvas_export/gauge_bundle.cjs``) with layer payloads from ``overlay_paint_plan`` —
+ * no Matplotlib overlay fallback. ``styles/*.py`` remain for matplotlib-only tooling.
+ * Chromium (preview) vs Skia (export) may differ slightly at the pixel level.
  */
 (function () {
   /** Must match ``app_config.DEFAULT_OVERLAY_REF_MODE`` — used when layout omits ``ref_mode``. */

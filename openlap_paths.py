@@ -119,6 +119,11 @@ def library_ffmpeg_dir() -> Path:
     return app_data_dir() / "Library" / "ffmpeg"
 
 
+def library_node_dir() -> Path:
+    """Portable layout: ``<app_dir>/Library/node`` — bundled ``node.exe`` for Canvas export."""
+    return app_data_dir() / "Library" / "node"
+
+
 def racebox_auth_file() -> Path:
     """Playwright storage state for racebox.pro login (``RaceBoxSource``)."""
     p = app_data_dir() / "racebox_auth.json"

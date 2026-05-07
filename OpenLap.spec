@@ -4,17 +4,23 @@
 # Build:
 #   pip install pyinstaller
 #   python tools/build_windows_portable.py
-#   (or: pyinstaller OpenLap.spec  then  python tools/stage_dist_library_ffmpeg.py)
+#   (or: pyinstaller OpenLap.spec  then  python tools/stage_dist_library_ffmpeg.py
+#        and  python tools/stage_dist_library_node.py and  python tools/stage_dist_tracks.py)
 #
-# Output: dist/OpenLap/  (onedir portable folder: OpenLap.exe, _internal/, Library/ffmpeg/, …)
+# Output: dist/OpenLap/  (onedir portable folder: OpenLap.exe, _internal/, Library/ffmpeg/, Library/node/, …)
 # User data (config, tracks, caches) resolves next to the exe when frozen; dev uses <repo>/.openlap/.
 # FFmpeg is NOT packed into _internal/: run stage_dist_library_ffmpeg.py so it lives under Library/ffmpeg/.
+# Node node.exe for Canvas export: fetch_node.py → third_party/, then stage_dist_library_node.py → Library/node/.
+# Track templates are NOT in datas/: run tools/stage_dist_tracks.py so only README + *.template.json
+# sit under ``tracks/`` next to OpenLap.exe (never bundle local real ``*.json`` from the repo).
 #
 # Requires:
 #   - On Windows, each PyInstaller run auto-downloads **latest** FFmpeg (BtbN
 #     GitHub release) into third_party/ffmpeg/win64/bin/ via tools/fetch_ffmpeg.py.
 #     Skip: set environment variable SKIP_FFMPEG_FETCH=1
 #   - Fallback if fetch skipped / failed: ffmpeg.exe next to this spec or PATH (ffmpeg_paths.py)
+#   - Node win-x64: tools/fetch_node.py stages node.exe into third_party/node/win64/ when missing
+#     (SKIP_NODE_FETCH=1 to skip; copy node.exe manually). Copy to dist via stage_dist_library_node.py.
 #   - All Python deps installed in the active environment
 
 import os, sys, subprocess as _sp
@@ -50,14 +56,39 @@ if sys.platform == 'win32':
         else:
             print('[OpenLap.spec] warning: tools/fetch_ffmpeg.py missing — using existing third_party / PATH')
 
+    # ── Auto-fetch Node.js win-x64 ``node.exe`` (Canvas overlay export) ─────────
+    _node_exe = HERE / 'third_party' / 'node' / 'win64' / 'node.exe'
+    _skip_node = os.environ.get('SKIP_NODE_FETCH', '').strip().lower() in ('1', 'true', 'yes')
+    _force_node = os.environ.get('FORCE_NODE_FETCH', '').strip().lower() in ('1', 'true', 'yes')
+    if not _skip_node and (not _node_exe.is_file() or _force_node):
+        _node_script = HERE / 'tools' / 'fetch_node.py'
+        if _node_script.is_file():
+            if _force_node and _node_exe.is_file():
+                try:
+                    _node_exe.unlink()
+                except OSError:
+                    pass
+            why = 'forced' if _force_node else 'missing staged node.exe'
+            print(f'[OpenLap.spec] Node.js win-x64 ({why}) → third_party/node/win64/ …')
+            _prn = _sp.run([sys.executable, str(_node_script)], cwd=str(HERE))
+            if _prn.returncode != 0:
+                raise RuntimeError(
+                    '[OpenLap.spec] Node fetch failed (exit %s). '
+                    'Check network, or set SKIP_NODE_FETCH=1 and copy node.exe into third_party/node/win64/.'
+                    % _prn.returncode
+                )
+        else:
+            print('[OpenLap.spec] warning: tools/fetch_node.py missing — Canvas export needs node on PATH or manual third_party/node/')
+
 # ── Data files ────────────────────────────────────────────────────────────────
 datas = [
     # Frontend (HTML/CSS/JS)
     (str(HERE / 'frontend'), 'frontend'),
+    # Headless Canvas overlay export; ``npm install`` in canvas_export at **build** time;
+    # portable runtime uses ``Library/node/node.exe`` (see tools/stage_dist_library_node.py).
+    (str(HERE / 'canvas_export'), 'canvas_export'),
     # Style plugins (matplotlib gauge renderers for video export)
     (str(HERE / 'styles'), 'styles'),
-    # Track start/finish JSON templates + user-shareable tracks
-    (str(HERE / 'tracks'), 'tracks'),
     # Playwright — bundle the entire package including its Node.js driver
     # so RaceBox cloud download works without any extra installs.
     (os.path.dirname(_pw_mod.__file__), 'playwright'),
@@ -126,6 +157,7 @@ hidden_imports = [
     'matplotlib.backends.backend_agg',
     # Misc runtime imports
     'numpy',
+    'node_paths',
     'pandas',
     'PIL',
     'PIL.Image',

@@ -18,6 +18,27 @@ def scale_factor(vw: int, vh: int, base_w: int = 1920, base_h: int = 1080) -> fl
     return math.sqrt((vw * vh) / (base_w * base_h))
 
 
+def px_to_pt(px: float, dpi: float = 100.0) -> float:
+    """Map a Canvas-style pixel size to matplotlib *linewidth* / marker points.
+
+    Matplotlib uses typographic points (1/72\"); the editor gauges size strokes in
+    **pixels** of the gauge bitmap.  With ``figsize=(w/dpi, h/dpi)`` and ``dpi``,
+    one output pixel should match one Canvas pixel, so ``pt = px * 72 / dpi``.
+    """
+    return max(0.25, float(px) * 72.0 / float(dpi))
+
+
+# ``fontsize`` only: Canvas ``…px 'Segoe UI'`` cap-height is smaller than MPL
+# ``fontsize`` points with default sans (often DejaVu) at the same number.
+# ~10–12% pull-down matches side-by-side preview vs export on Windows.
+_FONT_PX_TO_PT_SCALE = 0.88
+
+
+def font_px_to_pt(px: float, dpi: float = 100.0) -> float:
+    """Like :func:`px_to_pt` but for ``ax.text(..., fontsize=…)`` to match editor."""
+    return px_to_pt(max(0.25, float(px) * _FONT_PX_TO_PT_SCALE), dpi)
+
+
 def fig_to_rgba(fig, size: Tuple[int, int]) -> np.ndarray:
     """
     Convert a matplotlib figure to an RGBA numpy array at exactly (w, h) pixels.

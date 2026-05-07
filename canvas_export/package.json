@@ -1,0 +1,8 @@
+{
+  "name": "openlap-canvas-export",
+  "private": true,
+  "description": "Headless Canvas overlay for video export (same JS gauges as the editor). Run npm install here before using export_overlay_engine=canvas.",
+  "dependencies": {
+    "@napi-rs/canvas": "^0.1.80"
+  }
+}

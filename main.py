@@ -16,6 +16,16 @@ import sys
 from pathlib import Path
 
 
+class _SafeRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """RotatingFileHandler that tolerates ``stream.tell()`` failures (SMB / some mapped drives on Windows)."""
+
+    def shouldRollover(self, record):
+        try:
+            return bool(super().shouldRollover(record))
+        except OSError:
+            return False
+
+
 def _setup_logging() -> None:
     # Windows multiprocessing uses "spawn": worker processes re-import the
     # __main__ module and execute top-level code. If every worker attaches a
@@ -51,8 +61,8 @@ def _setup_logging() -> None:
         root.addHandler(ch)
 
     if not is_child_process:
-        fh = logging.handlers.RotatingFileHandler(
-            str(log_dir / 'openlap.log'), maxBytes=2*1024*1024, backupCount=3, encoding='utf-8')
+        fh = _SafeRotatingFileHandler(
+            str(log_dir / 'openlap.log'), maxBytes=2 * 1024 * 1024, backupCount=3, encoding='utf-8')
         fh.setLevel(logging.DEBUG)
         fh.setFormatter(fmt)
         root.addHandler(fh)

@@ -68,7 +68,8 @@ def _transform_xy(xs, ys, rotate_deg=0.0, mirror_x=False, mirror_y=False,
 
 def render(data: dict, w: int, h: int):
     import numpy as np
-    from overlay_utils import fig_to_rgba
+    from overlay_utils import fig_to_rgba, px_to_pt
+    from styles.map_circuit import _gps_dot_ok
 
     lats        = data.get('lats', [])
     lons        = data.get('lons', [])
@@ -98,15 +99,24 @@ def render(data: dict, w: int, h: int):
         from styles.map_circuit import render as _circuit
         return _circuit(data, w, h)
 
-    safe_idx    = max(0, min(cur_idx, len(lats) - 1))
-    center_lat  = lats[safe_idx]
-    center_lon  = lons[safe_idx]
+    safe_idx = max(0, min(cur_idx, len(lats) - 1))
+    dot_la, dot_lo, use_dot = _gps_dot_ok(data)
+    if use_dot:
+        center_lat, center_lon = dot_la, dot_lo
+    else:
+        center_lat, center_lon = lats[safe_idx], lons[safe_idx]
 
     x, y        = _gps_to_local(lats, lons, center_lat, center_lon)
     # Keep zoomed map locked on the current position (0,0), matching frontend.
     x, y        = _transform_xy(x, y, rotate_deg, mirror_x, mirror_y, center_x=0.0, center_y=0.0)
 
     dpi = 100
+    lw_osm_a = px_to_pt(max(6.0, w * 0.045), dpi)
+    lw_osm_b = px_to_pt(max(4.0, w * 0.028), dpi)
+    lw_out   = px_to_pt(max(4.0, w * 0.030), dpi)
+    lw_in    = px_to_pt(max(2.0, w * 0.015), dpi)
+    lw_ref   = px_to_pt(max(2.0, w * 0.013), dpi)
+
     fig, ax = plt.subplots(figsize=(w / dpi, h / dpi), dpi=dpi)
     fig.patch.set_alpha(0)
     ax.set_facecolor(map_bg)
@@ -127,16 +137,16 @@ def render(data: dict, w: int, h: int):
         ox, oy = _gps_to_local(osm_lats, osm_lons, center_lat, center_lon)
         ox, oy = _transform_xy(ox, oy, rotate_deg, mirror_x, mirror_y, center_x=0.0, center_y=0.0)
         sx, sy = _chaikin(ox, oy)
-        ax.plot(sx, sy, color='#4a5568', lw=9.0,
+        ax.plot(sx, sy, color='#4a5568', lw=lw_osm_a,
                 solid_capstyle='round', solid_joinstyle='round', zorder=0)
-        ax.plot(sx, sy, color='#2d3748', lw=5.5,
+        ax.plot(sx, sy, color='#2d3748', lw=lw_osm_b,
                 solid_capstyle='round', solid_joinstyle='round', zorder=0)
 
     # Full track outline
     sx, sy = _chaikin(x, y)
-    ax.plot(sx, sy, color=track_outer, lw=5.0,
+    ax.plot(sx, sy, color=track_outer, lw=lw_out,
             solid_capstyle='round', solid_joinstyle='round', zorder=1)
-    ax.plot(sx, sy, color=track_inner, lw=2.5,
+    ax.plot(sx, sy, color=track_inner, lw=lw_in,
             solid_capstyle='round', solid_joinstyle='round', zorder=2)
 
     # Reference lap trace + reference dot
@@ -144,21 +154,34 @@ def render(data: dict, w: int, h: int):
         rx, ry = _gps_to_local(ref_lats, ref_lons, center_lat, center_lon)
         rx, ry = _transform_xy(rx, ry, rotate_deg, mirror_x, mirror_y, center_x=0.0, center_y=0.0)
         rsx, rsy = _chaikin(rx, ry)
-        ax.plot(rsx, rsy, color=ref_col, lw=2.0, alpha=0.80,
+        ax.plot(rsx, rsy, color=ref_col, lw=lw_ref, alpha=0.80,
                 solid_capstyle='round', solid_joinstyle='round', zorder=3)
         safe_ref_idx = max(0, min(ref_cur_idx, len(ref_lats) - 1))
+        ms_ref = px_to_pt(2.0 * max(3.0, w * 0.022), dpi)
         ax.plot(rx[safe_ref_idx], ry[safe_ref_idx], 'o',
-                color=ref_col, ms=max(5, min(w, h) // 32),
-                mec='white', mew=1.4, zorder=6)
+                color=ref_col, ms=max(5.0, ms_ref),
+                mec='white', mew=px_to_pt(max(1.0, w * 0.006), dpi), zorder=6)
 
     # Start marker
+    ms_start = px_to_pt(2.0 * max(3.0, w * 0.020), dpi)
     ax.plot(x[0], y[0], 's', color=start_col,
-            ms=max(5, min(w, h) // 40), mec='white', mew=1.2, zorder=5)
+            ms=max(5.0, ms_start * 0.85), mec='white',
+            mew=px_to_pt(max(1.0, w * 0.006), dpi), zorder=5)
 
-    # Current position dot
-    dot_ms = max(7, min(w, h) // 25)
-    ax.plot(x[safe_idx], y[safe_idx], 'o',
-            color=dot_col, ms=dot_ms, mec='white', mew=1.8, zorder=7)
+    # Current position dot (origin when centred on telemetry GPS)
+    lat_m_c = 111000.0
+    lon_m_c = 111000.0 * math.cos(math.radians(center_lat))
+    if use_dot:
+        ddx = (float(dot_lo) - center_lon) * lon_m_c
+        ddy = (float(dot_la) - center_lat) * lat_m_c
+        ddx, ddy = _transform_xy([ddx], [ddy], rotate_deg, mirror_x, mirror_y, center_x=0.0, center_y=0.0)
+        px_dot, py_dot = ddx[0], ddy[0]
+    else:
+        px_dot, py_dot = x[safe_idx], y[safe_idx]
+    ms_cur = px_to_pt(2.0 * max(4.0, w * 0.028), dpi)
+    ax.plot(px_dot, py_dot, 'o',
+            color=dot_col, ms=max(7.0, ms_cur), mec='white',
+            mew=px_to_pt(max(1.0, w * 0.007), dpi), zorder=7)
 
     ax.set_xlim(-radius, radius)
     ax.set_ylim(-radius, radius)

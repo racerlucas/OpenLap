@@ -8,7 +8,7 @@
  */
 const GaugeGmeter = {
   render(ctx, data, w, h) {
-    const theme  = GaugeBase.getTheme(data.theme || 'Dark');
+    const theme  = GaugeBase.getTheme(data);
     const gxNow  = data.value     ?? 0;
     const gyNow  = data.value_gy  ?? 0;
     const gxHist = data.history_vals || [gxNow];

@@ -15,6 +15,7 @@ import pytest
 if 'webview' not in sys.modules:
     sys.modules['webview'] = MagicMock()
 
+from app_config import DEFAULT_OVERLAY_REF_MODE, overlay_from_dict
 from webview_api import WebviewAPI
 
 _FIXTURES = Path(__file__).resolve().parent / 'fixtures'
@@ -363,6 +364,7 @@ def test_save_config_persists_export_timing_and_scope(api):
         'export_overlay_only': True,
         'export_lap_range_start': 3,
         'export_lap_range_end': None,
+        'export_process_priority': 'below_normal',
     })
     d = api.get_config()
     assert d['export_scope'] == 'all_laps'
@@ -372,6 +374,15 @@ def test_save_config_persists_export_timing_and_scope(api):
     assert d['export_overlay_only'] is True
     assert d['export_lap_range_start'] == 3
     assert d['export_lap_range_end'] is None
+    assert d['export_process_priority'] == 'below_normal'
+
+
+def test_canvas_export_status_shape(api):
+    s = api.canvas_export_status()
+    assert isinstance(s, dict)
+    for k in ('node', 'node_path', 'bundle', 'server', 'napi_installed', 'ready'):
+        assert k in s
+    assert isinstance(s['ready'], bool)
 
 def test_overlay_from_dict_uses_default_ref_mode_when_missing():
     o = overlay_from_dict({})

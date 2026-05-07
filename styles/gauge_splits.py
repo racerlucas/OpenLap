@@ -32,7 +32,7 @@ from matplotlib.patches import FancyBboxPatch, Rectangle
 
 
 def render(data: dict, w: int, h: int):
-    from overlay_utils import fig_to_rgba, scale_factor
+    from overlay_utils import fig_to_rgba, scale_factor, px_to_pt, font_px_to_pt
 
     cur_elapsed = data.get('value',   0.0)
     sectors     = data.get('sectors', [])
@@ -67,12 +67,12 @@ def render(data: dict, w: int, h: int):
 
     ax.text(0.50, 0.93, 'SPLITS',
             ha='center', va='center', color=label_col,
-            fontsize=fs_title, fontfamily='sans-serif')
+            fontsize=font_px_to_pt(fs_title, dpi), fontfamily='sans-serif')
 
     if not sectors:
         ax.text(0.50, 0.50, 'No ref lap',
                 ha='center', va='center', color=label_col,
-                fontsize=fs_row, fontfamily='sans-serif')
+                fontsize=font_px_to_pt(fs_row, dpi), fontfamily='sans-serif')
         return fig_to_rgba(fig, (w, h))
 
     n     = len(sectors)
@@ -82,10 +82,10 @@ def render(data: dict, w: int, h: int):
 
     # Header row
     y_hdr = y_top
-    ax.text(0.12, y_hdr - row_h * 0.45, 'S',    ha='center', va='center', color=label_col, fontsize=fs_hdr, fontfamily='sans-serif')
-    ax.text(0.38, y_hdr - row_h * 0.45, 'REF',  ha='center', va='center', color=label_col, fontsize=fs_hdr, fontfamily='sans-serif')
-    ax.text(0.62, y_hdr - row_h * 0.45, 'CUR',  ha='center', va='center', color=label_col, fontsize=fs_hdr, fontfamily='sans-serif')
-    ax.text(0.87, y_hdr - row_h * 0.45, 'DIFF', ha='center', va='center', color=label_col, fontsize=fs_hdr, fontfamily='sans-serif')
+    ax.text(0.12, y_hdr - row_h * 0.45, 'S',    ha='center', va='center', color=label_col, fontsize=font_px_to_pt(fs_hdr, dpi), fontfamily='sans-serif')
+    ax.text(0.38, y_hdr - row_h * 0.45, 'REF',  ha='center', va='center', color=label_col, fontsize=font_px_to_pt(fs_hdr, dpi), fontfamily='sans-serif')
+    ax.text(0.62, y_hdr - row_h * 0.45, 'CUR',  ha='center', va='center', color=label_col, fontsize=font_px_to_pt(fs_hdr, dpi), fontfamily='sans-serif')
+    ax.text(0.87, y_hdr - row_h * 0.45, 'DIFF', ha='center', va='center', color=label_col, fontsize=font_px_to_pt(fs_hdr, dpi), fontfamily='sans-serif')
 
     # Identify next incomplete sector to highlight
     next_incomplete = None
@@ -113,17 +113,17 @@ def render(data: dict, w: int, h: int):
 
         ax.text(0.12, row_y, f'S{num}',
                 ha='center', va='center', color=text_col,
-                fontsize=fs_row, fontfamily='sans-serif')
+                fontsize=font_px_to_pt(fs_row, dpi), fontfamily='sans-serif')
 
         ref_str = f'{ref_t:.3f}' if ref_t is not None else '\u2014'
         ax.text(0.38, row_y, ref_str,
                 ha='center', va='center', color='#888888',
-                fontsize=fs_row, fontfamily='sans-serif')
+                fontsize=font_px_to_pt(fs_row, dpi), fontfamily='sans-serif')
 
         if cur_t is not None:
             ax.text(0.62, row_y, f'{cur_t:.3f}',
                     ha='center', va='center', color=text_col,
-                    fontsize=fs_row, fontfamily='sans-serif')
+                    fontsize=font_px_to_pt(fs_row, dpi), fontfamily='sans-serif')
             if delta is not None:
                 if abs(delta) < 0.001:
                     d_col = '#e8e8e8'
@@ -133,12 +133,12 @@ def render(data: dict, w: int, h: int):
                     d_col = '#ff4444'
                 ax.text(0.87, row_y, f'{delta:+.3f}',
                         ha='center', va='center', color=d_col,
-                        fontsize=fs_row, fontweight='bold', fontfamily='sans-serif')
+                        fontsize=font_px_to_pt(fs_row, dpi), fontweight='bold', fontfamily='sans-serif')
         else:
             dim = '#444444'
             ax.text(0.62, row_y, '\u2014', ha='center', va='center',
-                    color=dim, fontsize=fs_row, fontfamily='sans-serif')
+                    color=dim, fontsize=font_px_to_pt(fs_row, dpi), fontfamily='sans-serif')
             ax.text(0.87, row_y, '\u2014', ha='center', va='center',
-                    color=dim, fontsize=fs_row, fontfamily='sans-serif')
+                    color=dim, fontsize=font_px_to_pt(fs_row, dpi), fontfamily='sans-serif')
 
     return fig_to_rgba(fig, (w, h))

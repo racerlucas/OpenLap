@@ -51,7 +51,7 @@ def _delta_colour(value: float) -> str:
 
 
 def render(data: dict, w: int, h: int):
-    from overlay_utils import fig_to_rgba, scale_factor
+    from overlay_utils import fig_to_rgba, scale_factor, px_to_pt, font_px_to_pt
 
     entries = data.get('multi_channels', [])
     T       = data.get('_tc', {})
@@ -74,7 +74,7 @@ def render(data: dict, w: int, h: int):
 
     if not entries:
         ax_bg.text(0.5, 0.5, 'No channels', ha='center', va='center',
-                   color='#445566', fontsize=max(6, int(8 * sc)),
+                   color='#445566', fontsize=font_px_to_pt(max(6, int(8 * sc)), dpi),
                    fontfamily='sans-serif', transform=ax_bg.transAxes)
         return fig_to_rgba(fig, (w, h))
 
@@ -94,7 +94,7 @@ def render(data: dict, w: int, h: int):
     ax.set_ylim(-0.05, 1.05)
 
     # Zero line (subtle)
-    ax.axhline(0.5, color='#ffffff', lw=0.4, alpha=0.10, zorder=1)
+    ax.axhline(0.5, color='#ffffff', lw=px_to_pt(0.4, dpi), alpha=0.10, zorder=1)
 
     n_pts = max((len(e['values']) for e in entries), default=1)
 
@@ -123,7 +123,7 @@ def render(data: dict, w: int, h: int):
         xs = np.linspace(0, 1, n)
         ys = np.clip(norm, -0.05, 1.05)
 
-        lw = max(1.0, 1.5 * sc)
+        lw = px_to_pt(max(1.0, 1.5 * sc), dpi)
         ax.plot(xs, ys, color=colour, lw=lw,
                 solid_capstyle='round', alpha=0.90, zorder=3)
 
@@ -133,8 +133,8 @@ def render(data: dict, w: int, h: int):
 
         # Current value dot
         ax.plot(1.0, float(np.clip(norm[-1], -0.05, 1.05)),
-                'o', color=colour, ms=max(3, 4 * sc), zorder=5,
-                mec='white', mew=max(0.5, 0.6 * sc))
+                'o', color=colour, ms=px_to_pt(max(3.0, 4.0 * sc), dpi), zorder=5,
+                mec='white', mew=px_to_pt(max(0.5, 0.6 * sc), dpi))
 
     # Legend (right side) — one combined line per entry to avoid any overlap
     _g_ch = frozenset({'gforce_total', 'gforce_lat', 'gforce_lon', 'g_meter'})
@@ -187,7 +187,7 @@ def render(data: dict, w: int, h: int):
         ax_bg.text(legend_x + 0.032, y_centre,
                    combined,
                    ha='left', va='center', color=colour,
-                   fontsize=fs_leg, fontweight='bold', fontfamily='sans-serif',
+                   fontsize=font_px_to_pt(fs_leg, dpi), fontweight='bold', fontfamily='sans-serif',
                    transform=ax_bg.transAxes)
 
     return fig_to_rgba(fig, (w, h))

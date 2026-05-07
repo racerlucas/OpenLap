@@ -24,7 +24,7 @@ from matplotlib.patches import FancyBboxPatch
 
 
 def render(data: dict, w: int, h: int):
-    from overlay_utils import fig_to_rgba, scale_factor
+    from overlay_utils import fig_to_rgba, scale_factor, px_to_pt, font_px_to_pt
 
     value     = data.get('value',            0.0)
     hist      = data.get('history_vals',     [value])
@@ -89,7 +89,7 @@ def render(data: dict, w: int, h: int):
     ax.set_ylim(mn - pad, mx + pad)
 
     if symmetric:
-        ax.axhline(0.0, color=track_col, lw=0.6, zorder=1)
+        ax.axhline(0.0, color=track_col, lw=px_to_pt(0.6, dpi), zorder=1)
 
     # Reference trace (dashed grey, drawn first so current trace is on top)
     has_ref = bool(ref_hist) and len(ref_hist) >= 2
@@ -101,7 +101,7 @@ def render(data: dict, w: int, h: int):
             ref_vals = ref_vals[-len(cur_vals):]
         ref_ys = np.array(ref_vals, dtype=float)
         ax.plot(np.arange(len(ref_ys)), ref_ys,
-                color=ref_col, lw=max(0.8, 1.0 * sc),
+                color=ref_col, lw=px_to_pt(max(0.8, 1.0 * sc), dpi),
                 linestyle='--', alpha=0.70, zorder=2)
 
     # Current trace
@@ -109,14 +109,14 @@ def render(data: dict, w: int, h: int):
         ys       = np.array(cur_vals, dtype=float)
         baseline = 0.0 if symmetric else mn
         ax.plot(xs, ys, color=line_col,
-                lw=max(1.0, 1.4 * sc), solid_capstyle='round', zorder=3)
+                lw=px_to_pt(max(1.0, 1.4 * sc), dpi), solid_capstyle='round', zorder=3)
         ax.fill_between(xs, baseline, ys,
                         color=line_col, alpha=0.12, zorder=2)
 
     # ── Labels ────────────────────────────────────────────────────────────────
     ax_bg.text(0.04, 0.90, label.upper(),
                ha='left', va='top', color=label_col,
-               fontsize=fs_label, fontfamily='sans-serif',
+               fontsize=font_px_to_pt(fs_label, dpi), fontfamily='sans-serif',
                transform=ax_bg.transAxes)
 
     if channel == 'lap_time':
@@ -133,23 +133,23 @@ def render(data: dict, w: int, h: int):
 
     ax_bg.text(0.97, 0.88, val_str,
                ha='right', va='top', color=line_col,
-               fontsize=fs_val, fontweight='bold', fontfamily='sans-serif',
+               fontsize=font_px_to_pt(fs_val, dpi), fontweight='bold', fontfamily='sans-serif',
                transform=ax_bg.transAxes)
     if unit:
         ax_bg.text(0.97, 0.60, unit,
                    ha='right', va='center', color=unit_col,
-                   fontsize=fs_unit, fontfamily='sans-serif',
+                   fontsize=font_px_to_pt(fs_unit, dpi), fontfamily='sans-serif',
                    transform=ax_bg.transAxes)
 
     # Legend
     if has_ref:
         ax_bg.text(0.97, 0.28, '\u2014 NOW',
                    ha='right', va='center', color=line_col,
-                   fontsize=fs_leg, fontfamily='sans-serif',
+                   fontsize=font_px_to_pt(fs_leg, dpi), fontfamily='sans-serif',
                    transform=ax_bg.transAxes)
         ax_bg.text(0.97, 0.13, '-- REF',
                    ha='right', va='center', color=ref_col,
-                   fontsize=fs_leg, fontfamily='sans-serif',
+                   fontsize=font_px_to_pt(fs_leg, dpi), fontfamily='sans-serif',
                    transform=ax_bg.transAxes)
 
     return fig_to_rgba(fig, (w, h))

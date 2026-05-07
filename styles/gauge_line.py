@@ -21,7 +21,7 @@ from matplotlib.patches import FancyBboxPatch
 
 
 def render(data: dict, w: int, h: int):
-    from overlay_utils import fig_to_rgba, scale_factor
+    from overlay_utils import fig_to_rgba, scale_factor, px_to_pt, font_px_to_pt
 
     value     = data.get('value',       0.0)
     hist      = data.get('history_vals', [value])
@@ -79,7 +79,7 @@ def render(data: dict, w: int, h: int):
     if symmetric:
         line_col = fill_pos if value >= 0 else fill_neg
         fill_col = line_col
-        ax.axhline(0.0, color=track_col, lw=0.8, zorder=1)
+        ax.axhline(0.0, color=track_col, lw=px_to_pt(0.8, dpi), zorder=1)
     else:
         frac     = max(0.0, min(1.0, (value - mn) / rng))
         line_col = fill_hi if frac > 0.80 else fill_lo
@@ -87,7 +87,7 @@ def render(data: dict, w: int, h: int):
 
     if len(vals) >= 2:
         ys = np.array(vals, dtype=float)
-        ax.plot(xs, ys, color=line_col, lw=max(1.0, 1.4 * sc),
+        ax.plot(xs, ys, color=line_col, lw=px_to_pt(max(1.0, 1.4 * sc), dpi),
                 solid_capstyle='round', zorder=3)
         baseline = 0.0 if symmetric else mn
         ax.fill_between(xs, baseline, ys,
@@ -95,7 +95,7 @@ def render(data: dict, w: int, h: int):
 
     ax_bg.text(0.04, 0.90, label.upper(),
                ha='left', va='top', color=label_col,
-               fontsize=fs_label, fontfamily='sans-serif',
+               fontsize=font_px_to_pt(fs_label, dpi), fontfamily='sans-serif',
                transform=ax_bg.transAxes)
 
     if channel == 'lap_time':
@@ -113,12 +113,12 @@ def render(data: dict, w: int, h: int):
 
     ax_bg.text(0.95, 0.56, val_str,
                ha='right', va='center', color=line_col,
-               fontsize=fs_val, fontweight='bold', fontfamily='sans-serif',
+               fontsize=font_px_to_pt(fs_val, dpi), fontweight='bold', fontfamily='sans-serif',
                transform=ax_bg.transAxes)
     if unit:
         ax_bg.text(0.95, 0.28, unit,
                    ha='right', va='center', color=unit_col,
-                   fontsize=fs_unit, fontfamily='sans-serif',
+                   fontsize=font_px_to_pt(fs_unit, dpi), fontfamily='sans-serif',
                    transform=ax_bg.transAxes)
 
     return fig_to_rgba(fig, (w, h))

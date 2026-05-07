@@ -36,7 +36,7 @@ def _delta_colour(delta: float) -> str:
 
 
 def render(data: dict, w: int, h: int):
-    from overlay_utils import fig_to_rgba, scale_factor
+    from overlay_utils import fig_to_rgba, scale_factor, px_to_pt, font_px_to_pt
 
     value    = data.get('value', 0.0)
     history  = data.get('history_vals', [0.0])
@@ -78,11 +78,11 @@ def render(data: dict, w: int, h: int):
 
     ax.text(0.50, 0.80, label.upper(),
             ha='center', va='center', color=label_col,
-            fontsize=fs_label, fontfamily='sans-serif')
+            fontsize=font_px_to_pt(fs_label, dpi), fontfamily='sans-serif')
 
     ax.text(0.50, 0.46, txt,
             ha='center', va='center', color=colour,
-            fontsize=fs_value, fontweight='bold', fontfamily='sans-serif')
+            fontsize=font_px_to_pt(fs_value, dpi), fontweight='bold', fontfamily='sans-serif')
 
     # ── Sparkline (delta history trend) ───────────────────────────────────────
     if len(history) >= 2:
@@ -102,7 +102,7 @@ def render(data: dict, w: int, h: int):
         ax_spark.fill_between(xs, vals, zero,
                               where=vals <= 0,
                               color='#22dd66', alpha=0.35, linewidth=0)
-        ax_spark.plot(xs, vals, color=colour, linewidth=0.8, alpha=0.9)
-        ax_spark.axhline(0, color='#ffffff40', linewidth=0.5)
+        ax_spark.plot(xs, vals, color=colour, linewidth=px_to_pt(0.8, dpi), alpha=0.9)
+        ax_spark.axhline(0, color='#ffffff40', linewidth=px_to_pt(0.5, dpi))
 
     return fig_to_rgba(fig, (w, h))

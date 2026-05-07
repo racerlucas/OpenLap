@@ -108,6 +108,9 @@ const API = (() => {
       set_lap_tag:                   () => ({ ok: true }),
       import_dropped_paths:          () => ({ ok: false, message: 'mock' }),
       list_track_jsons:              () => [],
+      canvas_export_status:          () => ({
+        node: false, node_path: '', bundle: false, server: false, napi_installed: false, ready: false,
+      }),
     };
     const fn = mocks[method];
     return fn ? fn(...args) : null;
@@ -207,5 +210,6 @@ const API = (() => {
     setLapTag:                  (csvPath, lapNum, tag, enabled) => call('set_lap_tag', csvPath, lapNum, tag, enabled),
     importDroppedPaths:         (paths, selectedCsvPath) => call('import_dropped_paths', paths, selectedCsvPath),
     listTrackJsons:             ()                   => call('list_track_jsons'),
+    canvasExportStatus:         ()                   => call('canvas_export_status'),
   };
 })();

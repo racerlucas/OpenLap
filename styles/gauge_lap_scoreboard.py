@@ -25,7 +25,7 @@ def _fmt_time(secs: float) -> str:
 
 
 def render(data: dict, w: int, h: int):
-    from overlay_utils import fig_to_rgba
+    from overlay_utils import fig_to_rgba, px_to_pt, font_px_to_pt
 
     T         = data.get('_tc', {})
     bg_rgba   = T.get('bg_rgba',      (0.04, 0.06, 0.10, 0.78))
@@ -91,7 +91,7 @@ def render(data: dict, w: int, h: int):
 
     # Left accent bar
     ax.plot([0.035, 0.035], [0.08, 0.92],
-            color=fill_pos, lw=2.5, solid_capstyle='round', zorder=3)
+            color=fill_pos, lw=px_to_pt(2.5, dpi), solid_capstyle='round', zorder=3)
 
     # Row geometry — tight, fills the background
     n        = len(rows)
@@ -103,13 +103,11 @@ def render(data: dict, w: int, h: int):
     for i in range(1, n):
         yy = y_top - row_h * i
         ax.plot([0.06, 0.97], [yy, yy],
-                color=bg_edge, lw=0.5, zorder=2)
+                color=bg_edge, lw=px_to_pt(0.5, dpi), zorder=2)
 
-    # Font sizes driven purely by widget height so text fills each row.
-    # matplotlib pts at 100 dpi: 1 pt ≈ 1.39 px  →  px = h * row_frac
-    # label ≈ 28% of row height, value ≈ 52% of row height
-    fs_label = max(5,  int(h * row_h * 0.28 / 1.39))
-    fs_value = max(7,  int(h * row_h * 0.52 / 1.39))
+    # Font sizes: pixel budget per row (matches editor scoreboard density).
+    fs_label = max(5,  int(h * row_h * 0.28))
+    fs_value = max(7,  int(h * row_h * 0.52))
 
     pad_l = 0.08
 
@@ -123,7 +121,7 @@ def render(data: dict, w: int, h: int):
         ha_lbl = 'center' if align == 'center' else ('right' if align == 'right' else 'left')
         ax.text(x_lbl, y_lbl, lbl,
                 ha=ha_lbl, va='center', color=label_col,
-                fontsize=fs_label, fontfamily='sans-serif', zorder=4)
+                fontsize=font_px_to_pt(fs_label, dpi), fontfamily='sans-serif', zorder=4)
         if align == 'split':
             x_val, ha_val = 0.97, 'right'
         elif align == 'center':
@@ -134,7 +132,7 @@ def render(data: dict, w: int, h: int):
             x_val, ha_val = pad_l, 'left'
         ax.text(x_val, y_val, val,
                 ha=ha_val, va='center', color=col,
-                fontsize=fs_value, fontweight='bold',
+                fontsize=font_px_to_pt(fs_value, dpi), fontweight='bold',
                 fontfamily='monospace', zorder=4)
 
     return fig_to_rgba(fig, (w, h))

@@ -99,11 +99,18 @@ const THEMES = {
 };
 
 /**
- * Get theme object by name, falling back to Dark.
- * @param {string} name
+ * Theme palette for editor preview.
+ * Accepts a theme name string, or a live gauge payload with ``.theme``.
+ * @param {string|{theme?: string}|null|undefined} nameOrData
  * @returns {object}
  */
-function getTheme(name) {
+function getTheme(nameOrData) {
+  let name = 'Dark';
+  if (typeof nameOrData === 'string') {
+    name = nameOrData || 'Dark';
+  } else if (nameOrData && typeof nameOrData === 'object') {
+    name = nameOrData.theme || 'Dark';
+  }
   return THEMES[name] || THEMES.Dark;
 }
 

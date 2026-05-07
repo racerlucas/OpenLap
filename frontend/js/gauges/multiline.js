@@ -34,7 +34,7 @@ function _multilineColour(entry, palette) {
 
 const GaugeMultiline = {
   render(ctx, data, w, h) {
-    const theme   = GaugeBase.getTheme(data.theme || 'Dark');
+    const theme   = GaugeBase.getTheme(data);
     const entries = (data.multi_channels || []).filter(e => e != null);
     const palette = _linePalette(data);
 

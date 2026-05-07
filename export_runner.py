@@ -391,8 +391,8 @@ def run_export(
                         track_map_areas=_track_map_areas,
                         encode_options=_enc_opts,
                         container_choice=_cc,
-                        cancel_event=cancel_event,
-                    )
+                    cancel_event=cancel_event,
+                )
 
             elif item_scope == 'lap_range':
                 # All laps including outlap / inlap (ordered by lap_num)

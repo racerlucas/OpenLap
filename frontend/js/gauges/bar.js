@@ -8,7 +8,7 @@
  */
 const GaugeBar = {
   render(ctx, data, w, h) {
-    const theme = GaugeBase.getTheme(data.theme || 'Dark');
+    const theme = GaugeBase.getTheme(data);
 
     GaugeBase.drawBackground(ctx, w, h, theme);
 

@@ -7,7 +7,7 @@
  */
 const GaugeLean = {
   render(ctx, data, w, h) {
-    const theme = GaugeBase.getTheme(data.theme || 'Dark');
+    const theme = GaugeBase.getTheme(data);
 
     const value  = Math.max(-90, Math.min(90, data.value ?? 0));
     const label  = (data.label || 'Lean').toUpperCase();

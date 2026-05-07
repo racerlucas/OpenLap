@@ -179,6 +179,16 @@ class TestBuildVideoEncodeFlags:
         assert 'hevc_nvenc' in cmd
         assert '-c:a' in cmd and 'copy' in cmd
         assert '-progress' in cmd
+        assert '-threads' in cmd and '0' in cmd
+        assert '-tag:v' in cmd and 'hvc1' in cmd
+
+    def test_export_mux_tail_hvc1_only_for_hevc_family(self):
+        from video_renderer import _export_output_mux_tail
+
+        assert '-tag:v' not in ' '.join(_export_output_mux_tail('.mp4', 'libx264'))
+        t = _export_output_mux_tail('.mp4', 'hevc_nvenc')
+        assert 'hvc1' in t
+        assert _export_output_mux_tail('.mkv', 'hevc_nvenc') == []
 
     def test_vbr_nvenc_explicit_bitrate_skips_cq(self):
         from video_renderer import _build_video_encode_flags
@@ -237,3 +247,35 @@ class TestSyncOffsetFrameRange:
         # 60-second video at 30fps = 1800 frames; lap at 200–280s is outside
         f_start, f_end = self._calc(0.0, 200.0, 280.0, 30.0, 1800)
         assert f_end <= f_start   # no valid frame range
+
+
+def test_export_chunk_size_clamped():
+    from video_renderer import _export_chunk_size
+
+    assert _export_chunk_size(4, 3840, 2160) >= 4
+    assert _export_chunk_size(4, 1280, 720) >= 4
+    assert _export_chunk_size(16, 1280, 720) <= 128
+
+
+def test_materialize_shm_frame_slot_roundtrip():
+    from multiprocessing import shared_memory
+
+    import numpy as np
+
+    from overlay_dispatch import _materialize_shm_frame_slot
+
+    raw = np.arange(120, dtype=np.uint8).tobytes()
+    shm = shared_memory.SharedMemory(create=True, size=len(raw))
+    try:
+        shm.buf[: len(raw)] = raw
+        out = _materialize_shm_frame_slot(('_shm', shm.name, 0, len(raw)))
+        assert out == raw
+        off = 40
+        out2 = _materialize_shm_frame_slot(('_shm', shm.name, off, 50))
+        assert out2 == raw[off : off + 50]
+    finally:
+        shm.close()
+        try:
+            shm.unlink()
+        except FileNotFoundError:
+            pass

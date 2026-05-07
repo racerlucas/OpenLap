@@ -18,7 +18,7 @@ from matplotlib.patches import FancyBboxPatch
 
 
 def render(data: dict, w: int, h: int):
-    from overlay_utils import fig_to_rgba, scale_factor
+    from overlay_utils import fig_to_rgba, scale_factor, px_to_pt, font_px_to_pt
 
     value   = data.get('value',   0.0)
     label   = data.get('label',   '')
@@ -73,23 +73,23 @@ def render(data: dict, w: int, h: int):
     if channel == 'lap_time':
         ax.text(0.50, 0.86, label.upper(),
                 ha='center', va='center', color=label_col,
-                fontsize=fs_label, fontfamily='sans-serif')
+                fontsize=font_px_to_pt(fs_label, dpi), fontfamily='sans-serif')
         ax.text(0.50, 0.42, txt,
                 ha='center', va='center', color=text_col,
-                fontsize=fs_value, fontweight='bold', fontfamily='sans-serif')
+                fontsize=font_px_to_pt(fs_value, dpi), fontweight='bold', fontfamily='sans-serif')
         if unit and str(unit).strip():
             ax.text(0.50, 0.10, unit,
                     ha='center', va='center', color=unit_col,
-                    fontsize=fs_unit, fontfamily='sans-serif')
+                    fontsize=font_px_to_pt(fs_unit, dpi), fontfamily='sans-serif')
     else:
         ax.text(0.50, 0.78, label.upper(),
                 ha='center', va='center', color=label_col,
-                fontsize=fs_label, fontfamily='sans-serif')
+                fontsize=font_px_to_pt(fs_label, dpi), fontfamily='sans-serif')
         ax.text(0.50, 0.50, txt,
                 ha='center', va='center', color=text_col,
-                fontsize=fs_value, fontweight='bold', fontfamily='sans-serif')
+                fontsize=font_px_to_pt(fs_value, dpi), fontweight='bold', fontfamily='sans-serif')
         ax.text(0.50, 0.24, unit,
                 ha='center', va='center', color=unit_col,
-                fontsize=fs_unit, fontfamily='sans-serif')
+                fontsize=font_px_to_pt(fs_unit, dpi), fontfamily='sans-serif')
 
     return fig_to_rgba(fig, (w, h))
