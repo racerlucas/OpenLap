@@ -6,6 +6,9 @@
  * Receives progress via openlap CustomEvents: export_progress, export_log, export_done.
  */
 (function () {
+  /** Match ``app_config.DEFAULT_OVERLAY_REF_MODE`` when overlay omits ``ref_mode``. */
+  const DEFAULT_REF_MODE = 'session_best_so_far';
+
   let _container   = null;
   let _exporting   = false;
   let _logLines    = [];
@@ -1179,7 +1182,7 @@
       clip_start_s:     parseFloat($('exp-clip-start')?.value) || 0,
       clip_end_s:       parseFloat($('exp-clip-end')?.value)   || 0,
       padding:          parseFloat($('exp-padding').value)    || 5.0,
-      ref_mode:         layout.ref_mode          || 'none',
+      ref_mode:         layout.ref_mode          || DEFAULT_REF_MODE,
       ref_lap_csv_path: layout.ref_lap_csv_path  || '',
       ref_lap_num:      layout.ref_lap_num        || 0,
       export_video_codec: exp.export_video_codec ?? cfg.export_video_codec ?? 'h264',

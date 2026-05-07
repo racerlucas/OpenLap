@@ -307,6 +307,36 @@ def test_load_preview_history_covers_session_tail(api):
     assert srs[-1] >= srs[0]
 
 
+def test_load_preview_history_lap_time_hold_plateau_after_finish(api):
+    """After finish, ``t_display`` stays at lap duration for ~LAP_TIME_HOLD_AFTER_FINISH_S."""
+    from telemetry_algorithms import LAP_TIME_HOLD_AFTER_FINISH_S
+
+    csv = _FIXTURES / 'racebox_car.csv'
+    if not csv.is_file():
+        pytest.skip('fixture racebox_car.csv missing')
+    prev = api.load_preview_history(str(csv), 1)
+    if len(prev) < 200:
+        pytest.skip('preview history too short for hold assertion')
+    td = [float(p['t_display']) for p in prev]
+    sr = [float(p['sess_rel']) for p in prev]
+    # Plateau: consecutive equal t_display (finished lap time held)
+    best_run = 0
+    run = 0
+    prev_v = None
+    for v in td:
+        if prev_v is not None and v == prev_v and v > 1.0:
+            run += 1
+            best_run = max(best_run, run)
+        else:
+            run = 0
+        prev_v = v
+    min_samples = max(30, int(50 * LAP_TIME_HOLD_AFTER_FINISH_S / 3.0))
+    assert best_run >= min_samples, (
+        f'expected ~{LAP_TIME_HOLD_AFTER_FINISH_S}s hold plateau in t_display, '
+        f'best_run={best_run} min_samples={min_samples} sess_rel_span={sr[-1]-sr[0]:.3f}'
+    )
+
+
 def test_resolve_export_encoder_positional(api):
     avail = {'libx264': True, 'h264_nvenc': False}
     with patch.object(api, '_export_encoder_probe_dict', return_value=avail):
@@ -342,3 +372,21 @@ def test_save_config_persists_export_timing_and_scope(api):
     assert d['export_overlay_only'] is True
     assert d['export_lap_range_start'] == 3
     assert d['export_lap_range_end'] is None
+
+def test_overlay_from_dict_uses_default_ref_mode_when_missing():
+    o = overlay_from_dict({})
+    assert o.ref_mode == DEFAULT_OVERLAY_REF_MODE
+
+
+def test_json_safe_preview_deltas_for_pywebview_json():
+    """NaN/Inf are not JSON-safe for the JS bridge; preview delta RPC must strip them."""
+    import json
+
+    from webview_api import _json_safe_preview_deltas
+
+    raw = [-0.1, float('nan'), None, float('inf'), 'x', 2.0]
+    safe = _json_safe_preview_deltas(raw)
+    json.dumps(safe)
+    assert safe[0] == pytest.approx(-0.1)
+    assert safe[1] is None and safe[2] is None and safe[3] is None and safe[4] is None
+    assert safe[5] == pytest.approx(2.0)

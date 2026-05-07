@@ -10,6 +10,8 @@
  * export styles where applicable, but need not match matplotlib pixel-for-pixel.
  */
 (function () {
+  /** Must match ``app_config.DEFAULT_OVERLAY_REF_MODE`` — used when layout omits ``ref_mode``. */
+  const DEFAULT_REF_MODE = 'session_best_so_far';
   // ── Registry: maps style name → render function ────────────────────────────
   const GAUGE_RENDERERS = {
     'Numeric':    (ctx, d, w, h) => GaugeNumeric.render(ctx, d, w, h),
@@ -136,7 +138,10 @@
   let _liveSession     = null;  // {csv_path, lap_idx, video_paths, sync_offset, csv_start}
   let _liveSessionMeta = null;  // {track, laps, best, best_secs} from getSessionMeta
   let _liveLaps        = null;  // [{lap_idx, duration, is_best, elapsed_start}] from getLaps
-  let _selLapIdx       = 0;     // currently previewed lap index
+  /** Top #lap-sel dropdown only: highlight + prev/next + export staging label — not for gauge math. */
+  let _selLapIdx       = 0;
+  /** Lap index last passed to ``loadPreviewHistory`` / aligned RPC + video ``telT``; set in ``_loadLapData`` only. */
+  let _previewDataLapIdx = 0;
   let _livePoints      = null;  // [{t, speed, gx, gy, rpm, alt, lat, lon, lean}, ...]
   let _liveLats        = null;  // pre-extracted lat array for map gauge
   let _liveLons        = null;
@@ -419,19 +424,19 @@
       const mapLats = _liveLats || [];
       const mapLons = _liveLons || [];
       const vid = _liveVideo();
-      const lapStart = _liveLaps?.[_selLapIdx]?.elapsed_start ?? 0;
+      const lapStart = _liveLaps?.[_previewDataLapIdx]?.elapsed_start ?? 0;
       let rawDot = { lat: Number(p?.lat), lon: Number(p?.lon) };
       if (vid && Number(vid.duration) > 0 && _liveSession != null) {
         const telT = vid.currentTime - _liveOffset - lapStart;
         const ip = _interpLiveGpsAtTelT(telT);
         if (ip && Number.isFinite(ip.lat) && Number.isFinite(ip.lon)) rawDot = ip;
       }
-      const dotKey = `${_liveSession?.csv_path || ''}|${_selLapIdx}`;
+      const dotKey = `${_liveSession?.csv_path || ''}|${_previewDataLapIdx}`;
       if (_mapDotSessionKey !== dotKey) {
         _mapDotSessionKey = dotKey;
         _mapSmoothedDot = { ...rawDot };
       } else if (_mapSmoothedDot && Number.isFinite(rawDot.lat) && Number.isFinite(rawDot.lon)) {
-        const a = 0.34;
+        const a = 0.34; // keep in sync with video_renderer._MAP_DOT_EMA_ALPHA
         _mapSmoothedDot = {
           lat: _mapSmoothedDot.lat + a * (rawDot.lat - _mapSmoothedDot.lat),
           lon: _mapSmoothedDot.lon + a * (rawDot.lon - _mapSmoothedDot.lon),
@@ -541,26 +546,16 @@
     }
     if (channel === 'lap_info') {
       const laps      = _liveLaps || [];
-      const timedLaps = laps.filter(l => !l.is_outlap && !l.is_inlap);
       const idx2      = Math.max(0, Math.min(frameIdx, (_livePoints?.length || 1) - 1));
       const p2        = _livePoints?.[idx2];
-      const curRow    = laps[_selLapIdx ?? 0] || null;
-      const frameLapNum = Number(p2?.lap);
-      const frameLapRow = Number.isFinite(frameLapNum)
-        ? laps.find(l => Number(l?.lap_num) === frameLapNum) || null
-        : null;
-      // Count only timed laps up to and including current selection (fallback when no li_*)
-      const timedBefore = laps.slice(0, (_selLapIdx ?? 0) + 1)
-                              .filter(l => !l.is_outlap && !l.is_inlap).length;
       const defs = _channelDefaults('lap_info');
+      // Lap label: only per-sample Python fields / device lap counter — never #lap-sel index.
       let lapNum;
-      // UI contract: selected outlap always shows "Lap 0 / OUT LAP".
-      if (curRow?.is_outlap || frameLapRow?.is_outlap) {
-        lapNum = 0;
-      } else if (p2?.li_lap_num != null && Number.isFinite(Number(p2.li_lap_num))) {
-        lapNum = Math.round(Number(p2.li_lap_num));
+      if (p2?.li_lap_num != null && Number.isFinite(Number(p2.li_lap_num))) {
+        lapNum = Math.max(0, Math.round(Number(p2.li_lap_num)));
       } else {
-        lapNum = Math.max(1, timedBefore);
+        const rawLap = Number(p2?.lap);
+        lapNum = Number.isFinite(rawLap) ? Math.max(0, Math.round(rawLap)) : 1;
       }
       const totalLaps = (p2?.li_total_laps != null && Number.isFinite(Number(p2.li_total_laps)))
         ? Math.max(1, Math.round(Number(p2.li_total_laps)))
@@ -646,11 +641,11 @@
   }
 
 
-  /** Last frame index still on the selected lap (for ref-lap progress / map ghost). */
+  /** Last frame index still on the preview-anchor lap (ref ghost / compare — tied to loaded history). */
   function _lapBoundaryIdx() {
     const pts = _livePoints;
     if (!pts?.length) return 0;
-    const dur = _liveLaps?.[_selLapIdx]?.duration;
+    const dur = _liveLaps?.[_previewDataLapIdx]?.duration;
     if (dur != null && dur > 0) {
       if (_timeKey(pts[0]) > dur) return 0;
       if (_timeKey(pts[pts.length - 1]) <= dur) return pts.length - 1;
@@ -661,7 +656,7 @@
       }
       return lo;
     }
-    const selNum = _liveLaps?.[_selLapIdx]?.lap_num;
+    const selNum = _liveLaps?.[_previewDataLapIdx]?.lap_num;
     if (selNum == null) return pts.length - 1;
     let last = 0;
     for (let i = 0; i < pts.length; i++) {
@@ -716,7 +711,7 @@
       _mapRefLats = null; _mapRefLons = null;
       return;
     }
-    const mode = _layout.ref_mode || 'none';
+    const mode = _layout.ref_mode || DEFAULT_REF_MODE;
     if (mode === 'none') {
       _refLapPoints = null; _refCumDist = null; _refKey = '';
       _refLapCsvPath = ''; _refLapNum = 0;
@@ -726,7 +721,7 @@
 
     const resolved = await API.resolvePreviewReferenceLap(
       _liveSession.csv_path,
-      _selLapIdx,
+      _previewDataLapIdx,
       mode,
       _layout.ref_lap_csv_path || '',
       Number(_layout.ref_lap_num || 0) || 0,
@@ -771,17 +766,46 @@
       _deltaHistory = [];
       return;
     }
-    const refMode = _layout?.ref_mode || 'none';
+    const refMode = _layout?.ref_mode || DEFAULT_REF_MODE;
     const dynamicSoFar = refMode === 'session_best_so_far';
     if ((!dynamicSoFar && (!_refLapCsvPath || !_refLapNum)) || !_liveSession) {
+      console.warn('[delta_preview] skip recompute (no ref or no session)', {
+        refMode,
+        dynamicSoFar,
+        refCsv: _refLapCsvPath || '',
+        refNum: _refLapNum || 0,
+        hasSession: !!_liveSession,
+        dataLapIdx: _previewDataLapIdx,
+      });
       _livePoints = _livePoints.map(p => ({ ...p, delta_time: null }));
       _liveDeltaNow = null;
       _deltaHistory = [];
       return;
     }
     const deltas = await API.computePreviewDelta(
-      _liveSession.csv_path, _selLapIdx, _refLapCsvPath, _refLapNum, refMode
-    ).catch(() => []);
+      _liveSession.csv_path, _previewDataLapIdx, _refLapCsvPath, _refLapNum, refMode
+    ).catch((err) => {
+      console.warn('[delta_preview] computePreviewDelta RPC rejected/failed', err);
+      return [];
+    });
+    const nLive = _livePoints.length;
+    const nD = Array.isArray(deltas) ? deltas.length : 0;
+    let finite = 0;
+    if (Array.isArray(deltas)) {
+      for (const raw of deltas) {
+        const dv = Number(raw);
+        if (raw != null && Number.isFinite(dv)) finite += 1;
+      }
+    }
+    if (nD !== nLive) {
+      console.warn('[delta_preview] length mismatch (RPC vs live points)', { nD, nLive, refMode });
+    }
+    if (nD > 0 && finite === 0) {
+      console.warn('[delta_preview] RPC returned rows but no finite numbers (check Python log)', deltas.slice(0, 8));
+    }
+    if (nD > 0 && finite > 0) {
+      console.info('[delta_preview] applied', { nD, nLive, finite, refMode });
+    }
     _livePoints = _livePoints.map((p, i) => {
       const raw = deltas?.[i];
       const dv = Number(raw);
@@ -793,7 +817,7 @@
     if (!_liveSession || !_liveLaps?.length) return;
     const tracks = await API.getPreviewMapTracks(
       _liveSession.csv_path,
-      _selLapIdx,
+      _previewDataLapIdx,
       _refLapCsvPath || '',
       Number(_refLapNum || 0) || 0,
     ).catch(() => null);
@@ -892,7 +916,7 @@
     if (!_livePoints?.length) return;
     const vid = _liveVideo();
     if (vid && vid.readyState >= 1 && vid.duration) {
-      const lapStart = _liveLaps?.[_selLapIdx]?.elapsed_start ?? 0;
+      const lapStart = _liveLaps?.[_previewDataLapIdx]?.elapsed_start ?? 0;
       const telT = vid.currentTime - _liveOffset - lapStart;
       _liveFrameIdx = _findFrameIdx(telT);
     } else {
@@ -1000,7 +1024,7 @@
       const vid = _liveVideo();
       if (vid && _livePoints) {
         // Session timeline: same base as export — sess_t = vid_t - sync_offset, then minus lap start.
-        const lapStart = _liveLaps?.[_selLapIdx]?.elapsed_start ?? 0;
+        const lapStart = _liveLaps?.[_previewDataLapIdx]?.elapsed_start ?? 0;
         const telT     = vid.currentTime - _liveOffset - lapStart;
         const newIdx   = _findFrameIdx(telT);
         if (newIdx !== lastIdx) {
@@ -1108,7 +1132,7 @@
         // Hard-sync gauges on every video time tick so drag/seek always updates
         // even if RAF was interrupted by remount or tab focus changes.
         if (_livePoints?.length) {
-          const lapStart = _liveLaps?.[_selLapIdx]?.elapsed_start ?? 0;
+          const lapStart = _liveLaps?.[_previewDataLapIdx]?.elapsed_start ?? 0;
           const telT = vid.currentTime - _liveOffset - lapStart;
           _liveFrameIdx = _findFrameIdx(telT);
           _updateDeltaAtFrame(_liveFrameIdx);
@@ -1142,7 +1166,7 @@
         const newT = parseFloat(e.target.value) / 1000;
         v.currentTime = newT;
         if (_livePoints?.length) {
-          const lapStart = _liveLaps?.[_selLapIdx]?.elapsed_start ?? 0;
+          const lapStart = _liveLaps?.[_previewDataLapIdx]?.elapsed_start ?? 0;
           const telT = newT - _liveOffset - lapStart;
           _liveFrameIdx = _findFrameIdx(telT);
           _updateDeltaAtFrame(_liveFrameIdx);
@@ -1166,6 +1190,9 @@
     if (!_liveSession) return;
     const labelEl = _container?.querySelector('#live-label');
     const scrub   = _container?.querySelector('#live-scrub');
+
+    // Anchor all preview samples + RPC + video ``telT`` to this lap index (not #lap-sel alone).
+    _previewDataLapIdx = lapIdx;
 
     _livePoints   = null;
     _liveLats     = null;
@@ -2667,7 +2694,7 @@
 
     function updateRefInfoText() {
       if (!refInfoEl) return;
-      const mode = _layout?.ref_mode || 'none';
+      const mode = _layout?.ref_mode || DEFAULT_REF_MODE;
       const csv = _layout?.ref_lap_csv_path || _liveSession?.csv_path || '';
       const lapNum = _layout?.ref_lap_num || 0;
       const pts = _refLapPoints?.length || 0;
@@ -2759,7 +2786,7 @@
     }
 
     if (refSel) {
-      refSel.value = _layout.ref_mode || 'none';
+      refSel.value = _layout.ref_mode || DEFAULT_REF_MODE;
       refSel.addEventListener('change', e => {
         _layout.ref_mode = e.target.value;
         saveLayout();
@@ -2807,7 +2834,7 @@
         rebuildGaugeCanvases();
         updatePropPanel();
         const rs = container.querySelector('#ref-mode-sel');
-        if (rs) rs.value = _layout.ref_mode || 'none';
+        if (rs) rs.value = _layout.ref_mode || DEFAULT_REF_MODE;
         refreshManualPicker();
       }
     });

@@ -13,6 +13,9 @@ from openlap_paths import config_file, scan_cache_file
 
 logger = logging.getLogger(__name__)
 _OLD_CONFIG_V2  = Path.home() / '.telemetry_overlay' / 'config.json'
+
+# When overlay JSON omits ``ref_mode``, preview + export use best-so-far delta for the current lap.
+DEFAULT_OVERLAY_REF_MODE = 'session_best_so_far'
 _OLD_CONFIG_V1  = Path.home() / '.racebox_studio'    / 'config.json'
 
 
@@ -41,7 +44,7 @@ def _default_gauges() -> List[dict]:
 class OverlayLayout:
     is_bike:          bool       = False
     theme:            str        = 'Dark'
-    ref_mode:         str        = 'none'   # 'none' | 'session_best' | 'personal_best' | 'day_best' | 'session_best_so_far' | 'manual'
+    ref_mode:         str        = DEFAULT_OVERLAY_REF_MODE  # 'none' | 'session_best' | … | 'session_best_so_far' | 'manual'
     ref_lap_csv_path: str        = ''       # used when ref_mode='manual'
     ref_lap_num:      int        = 0        # used when ref_mode='manual'
     gauges:           List[dict] = field(default_factory=_default_gauges)
@@ -252,7 +255,7 @@ def overlay_from_dict(overlay_data: dict) -> OverlayLayout:
     return OverlayLayout(
         is_bike          = overlay_data.get('is_bike', False),
         theme            = overlay_data.get('theme',   'Dark'),
-        ref_mode         = overlay_data.get('ref_mode', 'none'),
+        ref_mode         = overlay_data.get('ref_mode', DEFAULT_OVERLAY_REF_MODE),
         ref_lap_csv_path = overlay_data.get('ref_lap_csv_path', ''),
         ref_lap_num      = int(overlay_data.get('ref_lap_num', 0) or 0),
         gauges           = gauges,

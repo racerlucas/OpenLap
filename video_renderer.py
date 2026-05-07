@@ -64,7 +64,9 @@ from telemetry_algorithms import (
     build_map_track,
     build_lap_info_lookup,
     build_history_row,
+    lap_duration_for_timer_hold,
     lap_info_fields_for_sample,
+    lap_preview_t0_session_elapsed,
     lap_time_display_value,
 )
 
@@ -598,9 +600,15 @@ class RenderJob:
     def __init__(self, label: str, lap: Optional[Lap]):
         self.label     = label
         self.lap       = lap
-        self.gpx_start = lap.elapsed_start if lap else None
-        self.gpx_end   = lap.elapsed_end   if lap else None
-        self.duration  = lap.duration      if lap else 0.0
+        if lap:
+            # Align session window + lap timer with crossing geometry (same as preview RPC).
+            self.gpx_start = lap_preview_t0_session_elapsed(lap)
+            self.gpx_end   = lap.elapsed_end
+            self.duration  = lap_duration_for_timer_hold(lap)
+        else:
+            self.gpx_start = None
+            self.gpx_end   = None
+            self.duration  = 0.0
 
 
 # ── Render helpers ────────────────────────────────────────────────────────────

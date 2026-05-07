@@ -57,6 +57,11 @@ def resolve_reference_lap(
     if ref_mode == 'manual':
         return _resolve_manual(ref_lap_csv_path, ref_lap_num, load_session_fn)
 
+    # Legacy / export-only labels: resolve like manual so editor preview and RPC
+    # ``resolve_preview_reference_lap`` still get a reference when paths are set.
+    if ref_mode in ('custom', 'track_library'):
+        return _resolve_manual(ref_lap_csv_path, ref_lap_num, load_session_fn)
+
     return None, 'none'
 
 

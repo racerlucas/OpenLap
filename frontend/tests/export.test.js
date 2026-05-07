@@ -276,7 +276,7 @@ describe('Export page — previewSession → selectedItems wiring', () => {
     cleanupContainer(freshContainer);
   });
 
-  test('ref_mode defaults to "none" when overlay has no ref_mode', async () => {
+  test('ref_mode defaults to session_best_so_far when overlay has no ref_mode', async () => {
     const startExport = vi.fn(async () => null);
     globalThis.API = makeAPI({ startExport, getOverlay: vi.fn(async () => ({})) });
     const freshRouter = makeRouter();
@@ -291,7 +291,7 @@ describe('Export page — previewSession → selectedItems wiring', () => {
     freshContainer.querySelector('#exp-start-btn').click();
     await flushAsync();
 
-    expect(startExport.mock.calls[0][0].ref_mode).toBe('none');
+    expect(startExport.mock.calls[0][0].ref_mode).toBe('session_best_so_far');
 
     freshPage.unmount();
     cleanupContainer(freshContainer);

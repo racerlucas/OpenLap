@@ -11,9 +11,12 @@ those separate unless they change the inputs or formulas above.
 """
 from __future__ import annotations
 
+import logging
 from typing import Iterable, Optional, Any
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 LAP_TIME_HOLD_AFTER_FINISH_S = 3.0
 MAP_MAX_POINTS = 600
@@ -93,6 +96,15 @@ def lap_index_at_session_elapsed(laps: Iterable, elapsed: float) -> Optional[int
         lo = float(pts[0].elapsed)
         hi = float(pts[-1].elapsed)
         if lo - 1e-4 <= e <= hi + 1e-4:
+            return int(i)
+    return None
+
+
+def lap_index_for_lap_num(laps: Iterable, lap_num: int) -> Optional[int]:
+    """First lap row index whose ``lap_num`` matches (aligns with :meth:`Session.interpolate_at` ``p.lap``)."""
+    want = int(lap_num)
+    for i, lap in enumerate(laps or []):
+        if int(getattr(lap, 'lap_num', 0)) == want:
             return int(i)
     return None
 
@@ -215,10 +227,17 @@ def compute_preview_delta_series(
     laps_list = getattr(cur_sess, 'laps', None) or []
     last_valid = 0.0
     out: list = []
+    n_none_no_lap_idx = 0
+    n_none_no_active_ref = 0
+    n_none_bad_profile = 0
+    n_ok = 0
     for sess_abs, p in samples:
         try:
-            idx = lap_index_at_session_elapsed(laps_list, float(sess_abs))
+            idx = lap_index_for_lap_num(laps_list, int(getattr(p, 'lap', 0)))
             if idx is None:
+                idx = lap_index_at_session_elapsed(laps_list, float(sess_abs))
+            if idx is None:
+                n_none_no_lap_idx += 1
                 out.append(None)
                 continue
             lap_obj = laps_list[idx]
@@ -227,11 +246,13 @@ def compute_preview_delta_series(
             active_ref = best_so_far_timed_lap_before_index(cur_sess, idx) if dynamic_so_far else ref_lap
 
             if active_ref is None:
+                n_none_no_active_ref += 1
                 out.append(None)
                 continue
             t_arr, d_arr = _profile_for_lap_num(lap_num)
             delta_fn = _delta_fn_for_lap_num(lap_num, active_ref)
             if delta_fn is None or len(t_arr) < 2 or len(d_arr) < 2:
+                n_none_bad_profile += 1
                 out.append(None)
                 continue
             lap_elapsed = float(p.lap_elapsed)
@@ -241,9 +262,21 @@ def compute_preview_delta_series(
             dv = float(delta_fn(lap_elapsed, cur_dist))
             v = float(dv) if np.isfinite(dv) else 0.0
             last_valid = v
+            n_ok += 1
             out.append(v)
         except Exception:
             out.append(last_valid)
+    logger.info(
+        '[delta_preview] compute_preview_delta_series: samples=%d ok=%d '
+        'none_no_lap_idx=%d none_no_active_ref=%d none_bad_profile_or_fn=%d dynamic_so_far=%s ref_lap_num=%s',
+        len(samples),
+        n_ok,
+        n_none_no_lap_idx,
+        n_none_no_active_ref,
+        n_none_bad_profile,
+        dynamic_so_far,
+        int(getattr(ref_lap, 'lap_num', 0)) if ref_lap is not None else None,
+    )
     return out
 
 
@@ -301,10 +334,17 @@ def build_lap_info_lookup(laps: Iterable) -> dict[str, Any]:
     }
 
 
-def lap_info_fields_for_sample(laps: Iterable, sample_elapsed: float, raw_lap_num: int, lookup: dict[str, Any]) -> dict[str, Any]:
+def lap_info_fields_for_sample(
+    laps: Iterable,
+    _sample_elapsed: float,
+    raw_lap_num: int,
+    lookup: dict[str, Any],
+) -> dict[str, Any]:
     """Resolve lap-info display fields for one telemetry sample."""
-    lap = lap_at_session_elapsed(laps, sample_elapsed)
-    active_lap_num = int(getattr(lap, 'lap_num', raw_lap_num))
+    # Prefer the per-sample lap counter from ``Session.interpolate_at`` (crossing-aware).
+    # ``lap_at_session_elapsed`` uses raw point time spans and can match the wrong lap
+    # when spans overlap or leave gaps vs the interpolated grid.
+    active_lap_num = int(raw_lap_num)
     display_by = lookup.get('display_by_lap_num', {})
     sofar_by = lookup.get('best_so_far_by_lap_num', {})
     best_by = lookup.get('best_by_lap', {})
@@ -354,6 +394,30 @@ def lap_time_display_value(raw_lap_t: float, lap_dur: float,
     if rt <= dur + max(0.0, float(hold_s)):
         return dur
     return live
+
+
+def lap_preview_t0_session_elapsed(lap) -> float:
+    """Session elapsed at preview ``sess_rel=0`` — prefer crossing start so ``sess_rel`` matches ``Lap.duration``."""
+    cs = getattr(lap, 'crossing_start_elapsed', None)
+    if cs is not None:
+        return float(cs)
+    pts = getattr(lap, 'points', None) or []
+    return float(pts[0].elapsed) if pts else 0.0
+
+
+def lap_duration_for_timer_hold(lap) -> float:
+    """Duration for ``lap_time_display_value``; fall back when ``Lap.duration`` is zero or inconsistent."""
+    d = float(getattr(lap, 'duration', 0.0) or 0.0)
+    if d > 1e-6:
+        return d
+    cs = getattr(lap, 'crossing_start_elapsed', None)
+    ce = getattr(lap, 'crossing_end_elapsed', None)
+    if cs is not None and ce is not None and float(ce) > float(cs) + 1e-9:
+        return max(0.0, float(ce) - float(cs))
+    pts = getattr(lap, 'points', None) or []
+    if len(pts) >= 2:
+        return max(0.0, float(pts[-1].elapsed) - float(pts[0].elapsed))
+    return 0.0
 
 
 def build_map_track(points: Iterable, max_points: int = 600,

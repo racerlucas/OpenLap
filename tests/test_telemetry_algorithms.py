@@ -8,7 +8,9 @@ import numpy as np
 
 from telemetry_algorithms import (
     build_complete_map_track,
+    build_lap_info_lookup,
     lap_display_num_for_point,
+    lap_info_fields_for_sample,
     _fit_centerline_from_laps,
     _resample_points,
 )
@@ -39,6 +41,7 @@ class FakeLapTimed:
     points: List[FakeDP]
     is_outlap: bool = False
     is_inlap: bool = False
+    duration: float = 50.0
 
 
 def test_fit_centerline_median_two_parallel_lines():
@@ -81,3 +84,23 @@ def test_lap_display_num_for_point_outlap_is_zero():
     laps = [out, timed]
     assert lap_display_num_for_point(laps, 5.0, raw_lap_num=1) == 0
     assert lap_display_num_for_point(laps, 50.0, raw_lap_num=2) == 2
+
+
+def test_lap_info_fields_use_raw_lap_num_not_first_overlapping_bucket():
+    """When lap point elapsed spans overlap, ``interpolate_at`` lap counter must win."""
+    out = FakeLapTimed(
+        lap_num=0,
+        points=[FakeDP(0.0, 0), FakeDP(100.0, 0)],
+        is_outlap=True,
+        duration=100.0,
+    )
+    timed = FakeLapTimed(
+        lap_num=1,
+        points=[FakeDP(50.0, 1), FakeDP(150.0, 1)],
+        is_outlap=False,
+        duration=100.0,
+    )
+    laps = [out, timed]
+    lookup = build_lap_info_lookup(laps)
+    li = lap_info_fields_for_sample(laps, 60.0, 1, lookup)
+    assert li['li_lap_num'] == 1

@@ -22,6 +22,7 @@ from __future__ import annotations
 import http.server
 import json
 import logging
+import math
 import mimetypes
 import os
 import threading
@@ -33,9 +34,26 @@ from typing import List, Optional
 
 import webview
 
-from app_config import AppConfig, overlay_from_dict, load_scan_cache
+from app_config import AppConfig, DEFAULT_OVERLAY_REF_MODE, overlay_from_dict, load_scan_cache
 
 logger = logging.getLogger(__name__)
+
+
+def _json_safe_preview_deltas(series: list) -> list:
+    """Finite floats or ``None`` only — pywebview/JS JSON cannot consume NaN/Infinity."""
+    out: list = []
+    for x in series or []:
+        if x is None:
+            out.append(None)
+            continue
+        try:
+            v = float(x)
+        except (TypeError, ValueError):
+            out.append(None)
+            continue
+        out.append(v if math.isfinite(v) else None)
+    return out
+
 
 _ALLOWED_VIDEO_EXTENSIONS = frozenset({
     '.mp4', '.mov', '.avi', '.mkv', '.m4v',
@@ -98,7 +116,8 @@ class _VideoFileHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(403, 'Forbidden')
             return
 
-        logger.debug('VideoServer GET %s → %s (exists=%s)', self.path, raw, os.path.isfile(raw))
+        # Avoid logger.debug here: each range request hits this path; noisy and triggers
+        # RotatingFileHandler rollover checks on every emit (problematic on SMB logs).
         if not os.path.isfile(raw):
             logger.warning('VideoServer 404: %s', raw)
             self.send_error(404, 'File not found')
@@ -1278,7 +1297,7 @@ class WebviewAPI:
 
             cur_lap_num = getattr(sess.laps[lap_idx], 'lap_num', None)
             ref_lap, desc = resolve_reference_lap(
-                ref_mode=ref_mode or 'none',
+                ref_mode=(ref_mode or '').strip() or DEFAULT_OVERLAY_REF_MODE,
                 sess=sess,
                 session_info=self._config.session_info or {},
                 scan_cache=load_scan_cache(),
@@ -1289,16 +1308,30 @@ class WebviewAPI:
                 load_session_fn=self._load_session,
             )
             if not ref_lap:
+                logger.info(
+                    '[delta_preview] resolve_preview_reference_lap: no reference lap '
+                    '(mode=%r lap_idx=%d desc=%s)',
+                    (ref_mode or '').strip() or DEFAULT_OVERLAY_REF_MODE,
+                    lap_idx,
+                    desc,
+                )
                 return {'ok': True, 'ref_csv_path': '', 'ref_lap_num': 0, 'desc': desc}
             src_csv = getattr(ref_lap, '_source_csv_path', '') or ''
             if not src_csv:
                 src_csv = ref_lap_csv_path if ref_mode == 'manual' else csv_path
-            return {
+            out = {
                 'ok': True,
                 'ref_csv_path': os.path.abspath(src_csv),
                 'ref_lap_num': int(getattr(ref_lap, 'lap_num', 0) or 0),
                 'desc': desc,
             }
+            logger.info(
+                '[delta_preview] resolve_preview_reference_lap: ok ref_csv=%r ref_lap_num=%s desc=%s',
+                out['ref_csv_path'],
+                out['ref_lap_num'],
+                desc,
+            )
+            return out
         except Exception as e:
             logger.exception('resolve_preview_reference_lap failed for %s lap %d: %s', csv_path, lap_idx, e)
             return {'ok': False, 'ref_csv_path': '', 'ref_lap_num': 0, 'desc': str(e)}
@@ -1361,7 +1394,7 @@ class WebviewAPI:
         Each dict includes:
 
         - ``t``: lap_elapsed for that sample's lap (same as :meth:`load_lap_history`).
-        - ``sess_rel``: ``point.elapsed - lap_start_elapsed`` (monotonic along the preview).
+        - ``sess_rel``: ``point.elapsed - lap_preview_t0`` (crossing start when known, else first point).
         - ``lap``: lap number from the telemetry row.
         """
         try:
@@ -1369,7 +1402,9 @@ class WebviewAPI:
                 apply_g_meter_smoothing_inplace,
                 build_lap_info_lookup,
                 build_history_row,
+                lap_duration_for_timer_hold,
                 lap_info_fields_for_sample,
+                lap_preview_t0_session_elapsed,
                 lap_time_display_value,
                 sample_session_points,
             )
@@ -1379,8 +1414,8 @@ class WebviewAPI:
             lap = session.laps[lap_idx]
             if not lap.points:
                 return []
-            t0 = float(lap.points[0].elapsed)
-            lap_dur = float(lap.duration or 0.0)
+            t0 = lap_preview_t0_session_elapsed(lap)
+            lap_dur = lap_duration_for_timer_hold(lap)
             lap_info_lookup = build_lap_info_lookup(session.laps)
             points = []
             end_elapsed = float(session.all_points[-1].elapsed) if session.all_points else t0
@@ -1420,38 +1455,99 @@ class WebviewAPI:
         distance-profile interpolation), and returns one value per sample in
         ``load_preview_history(csv_path, lap_idx)`` order.
         """
+        rm = (ref_mode or '').strip() or DEFAULT_OVERLAY_REF_MODE
+
+        def _log(msg: str, *args: object) -> None:
+            logger.info('[delta_preview] ' + msg, *args)
+
         try:
             from delta_time import compute_lap_profile
 
+            _log(
+                'compute_preview_delta enter csv=%r lap_idx=%d ref_mode=%r ref_csv=%r ref_lap_num=%r',
+                csv_path,
+                lap_idx,
+                rm,
+                ref_csv_path,
+                ref_lap_num,
+            )
+
             cur_sess = self._load_session(csv_path)
-            if not cur_sess or lap_idx >= len(cur_sess.laps):
+            if not cur_sess:
+                _log('abort: _load_session returned empty for csv=%r', csv_path)
+                return []
+            if lap_idx >= len(cur_sess.laps):
+                _log(
+                    'abort: lap_idx %d out of range (session has %d laps)',
+                    lap_idx,
+                    len(cur_sess.laps),
+                )
                 return []
             cur_lap = cur_sess.laps[lap_idx]
 
-            dynamic_so_far = (ref_mode == 'session_best_so_far')
+            dynamic_so_far = (rm == 'session_best_so_far')
             ref_lap = None
             if not dynamic_so_far:
                 if not ref_csv_path or not ref_lap_num:
+                    _log(
+                        'abort: static ref missing ref_csv_path=%r ref_lap_num=%r (JS skips RPC when both unset)',
+                        ref_csv_path,
+                        ref_lap_num,
+                    )
                     return []
                 ref_sess = self._load_session(ref_csv_path)
                 if not ref_sess:
+                    _log('abort: _load_session returned empty for ref_csv=%r', ref_csv_path)
                     return []
-                ref_lap = next((l for l in ref_sess.laps if int(getattr(l, 'lap_num', 0)) == int(ref_lap_num)), None)
+                ref_lap = next(
+                    (l for l in ref_sess.laps if int(getattr(l, 'lap_num', 0)) == int(ref_lap_num)),
+                    None,
+                )
                 if ref_lap is None:
+                    nums = [int(getattr(l, 'lap_num', -1)) for l in (ref_sess.laps or [])]
+                    _log(
+                        'abort: ref lap_num %r not in ref session (available lap_nums=%s)',
+                        ref_lap_num,
+                        nums[:40],
+                    )
                     return []
 
             cur_t, cur_d = compute_lap_profile(cur_lap)
             if len(cur_t) < 2 or len(cur_d) < 2:
+                _log(
+                    'abort: anchor lap profile too short (len_t=%d len_d=%d) lap_idx=%d lap_num=%s',
+                    len(cur_t),
+                    len(cur_d),
+                    lap_idx,
+                    getattr(cur_lap, 'lap_num', '?'),
+                )
                 return []
 
-            from telemetry_algorithms import compute_preview_delta_series, sample_session_points
+            from telemetry_algorithms import (
+                compute_preview_delta_series,
+                lap_preview_t0_session_elapsed,
+                sample_session_points,
+            )
 
-            t0 = float(cur_lap.points[0].elapsed) if cur_lap.points else 0.0
+            t0 = lap_preview_t0_session_elapsed(cur_lap)
             end_elapsed = float(cur_sess.all_points[-1].elapsed) if cur_sess.all_points else t0
             samples = sample_session_points(cur_sess, t0, end_elapsed, sample_hz=60.0)
-            return compute_preview_delta_series(cur_sess, samples, ref_lap, dynamic_so_far)
-        except Exception as e:
-            logger.exception('compute_preview_delta failed for %s lap %d: %s', csv_path, lap_idx, e)
+            raw_series = compute_preview_delta_series(cur_sess, samples, ref_lap, dynamic_so_far)
+            safe = _json_safe_preview_deltas(raw_series)
+            n_raw = len(raw_series)
+            n_safe = len(safe)
+            n_finite = sum(1 for x in safe if x is not None and math.isfinite(float(x)))
+            _log(
+                'done: samples=%d raw_series_len=%d safe_len=%d finite_vals=%d anchor_lap_num=%s',
+                len(samples),
+                n_raw,
+                n_safe,
+                n_finite,
+                getattr(cur_lap, 'lap_num', '?'),
+            )
+            return safe
+        except Exception:
+            logger.exception('[delta_preview] compute_preview_delta exception csv=%r lap=%d', csv_path, lap_idx)
             return []
 
     def get_preview_map_tracks(self, csv_path: str, lap_idx: int,
@@ -2307,7 +2403,7 @@ class WebviewAPI:
                 layout            = params.get('layout', {}),
                 clip_start_s      = params.get('clip_start_s', 0.0),
                 clip_end_s        = params.get('clip_end_s', 0.0),
-                ref_mode          = params.get('ref_mode', 'none'),
+                ref_mode          = params.get('ref_mode', DEFAULT_OVERLAY_REF_MODE),
                 ref_lap_obj       = None,
                 ref_lap_csv_path  = params.get('ref_lap_csv_path', ''),
                 ref_lap_num       = int(params.get('ref_lap_num', 0) or 0),
